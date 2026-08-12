@@ -1,8 +1,10 @@
 """
 Shared configurations and environment variables for all agent demos.
 """
+
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load environment variables from parent directory if present

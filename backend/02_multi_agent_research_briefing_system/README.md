@@ -13,15 +13,37 @@ An agent team that autonomously plans research, retrieves and synthesizes inform
 ### Ingestion
 First, we need to set up an ingestion flow, where we read from a variety of sources. We will use free APIs to ingest context. Anything with free form text, such as filings or news should be embedded for future RAG use. Anything that changes more often should be cached with Redis with TTL. 
 
-Inputs:
-- Company Ticker
-
-Output:
-- Structured report of the company. The current state of the company and what to expect.
-
 Data sources:
 - [x] MARKET DATA: Yahoo finance API (https://github.com/ranaroussi/yfinance), Massive (https://massive.com/dashboard)
     - Close prices from 3mo ago to now
 - [x] FILINGS: Edgar
 - [x] COMPANY PROFILE: Yahoo finance API
 - [x] NEWS: Marketaux or GNews API
+
+### Agentic Design
+Inputs:
+- Company Ticker
+- Market Data
+
+Tools:
+- RAG search tool (type, query)
+
+Output:
+- Structured briefing of the company. The current state of the company and what to expect.
+- Citations with quote and source_id
+
+Guardrails:
+- Pre agent: If briefing exists from the past 24 hours, return that
+- Post agent: Grounding
+
+Production:
+- Observability
+- Retries
+- Concurrency
+- Logging
+
+### API Setup
+- Setup fastapi so I can query these data functions to see them on the frontend
+
+### UI
+- Create simple UI that can either pull data from API or trigger the agent and render a markdown

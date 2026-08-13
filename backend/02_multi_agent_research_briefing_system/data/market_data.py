@@ -8,7 +8,7 @@ r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 
 def get_close_data(symbol: str):
-    today = datetime.today().strftime("%Y-%m-%d")
+    today = datetime.today().strftime("%Y-%m-%d")  # noqa: DTZ002
     cache_key = f"close_data-{symbol}-{today}"
 
     # Check redis first
@@ -33,7 +33,6 @@ def get_close_data(symbol: str):
     r.set(cache_key, data, ex=12 * 60 * 60)
 
     # Return normalized data
-    r.close()
     return result
 
 

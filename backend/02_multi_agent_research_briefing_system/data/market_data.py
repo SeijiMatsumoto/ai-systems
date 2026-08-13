@@ -1,13 +1,29 @@
 import json
 from datetime import datetime
+from typing import Literal
 
+import pandas as pd
 import redis
 import yfinance as yf
 
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
+StatementType = Literal["income", "balance_sheet", "cash_flow"]
+FinancialFrequency = Literal["yearly", "quarterly"]
 
-def get_close_data(symbol: str):
+
+def _json_safe_value(value):
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        value = value.item()
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def get_close_data(symbol: str) -> list[dict[str, str | float]]:
+    # To be prefetched
     today = datetime.today().strftime("%Y-%m-%d")  # noqa: DTZ002
     cache_key = f"close_data-{symbol}-{today}"
 
@@ -23,20 +39,24 @@ def get_close_data(symbol: str):
     # If cache miss, hit yfinance API
     df = yf.Ticker(symbol).history(period="3mo")
 
-    # Normalize data
-    result = df[["Close"]].reset_index()
-    result["Date"] = result["Date"].dt.strftime("%Y-%m-%d")
-    result["Close"] = format(result["Close"], ".2f")
+    # Normalize data into the same JSON-serializable shape returned by Redis.
+    result = [
+        {
+            "Date": date.strftime("%Y-%m-%d"),
+            "Close": round(float(close), 2),
+        }
+        for date, close in df["Close"].items()
+    ]
 
     # Store in redis cache
-    data = result.to_json(orient="records")
-    r.set(cache_key, data, ex=12 * 60 * 60)
+    r.set(cache_key, json.dumps(result), ex=12 * 60 * 60)
 
     # Return normalized data
     return result
 
 
 def get_company_snapshot(symbol: str) -> dict:
+    # To be prefetched
     cache_key = f"snapshot-{symbol}"
 
     cached_data = r.get(cache_key)
@@ -80,4 +100,62 @@ def get_company_snapshot(symbol: str) -> dict:
     return snapshot
 
 
-print(get_company_snapshot("AAPL"))
+def get_historical_financials(
+    symbol: str,
+    statement_type: StatementType = "income",
+    frequency: FinancialFrequency = "yearly",
+    periods: int = 4,
+) -> dict:
+    """Fetch historical financial statements in a period-first JSON shape."""
+    valid_statement_types = {"income", "balance_sheet", "cash_flow"}
+    if statement_type not in valid_statement_types:
+        raise ValueError(
+            "statement_type must be income, balance_sheet, or cash_flow"
+        )
+    if frequency not in {"yearly", "quarterly"}:
+        raise ValueError("frequency must be yearly or quarterly")
+    if not 1 <= periods <= 8:
+        raise ValueError("periods must be between 1 and 8")
+
+    normalized_symbol = symbol.upper()
+    today = datetime.today().strftime("%Y-%m-%d")  # noqa: DTZ002
+    cache_key = (
+        f"financials-{normalized_symbol}-{statement_type}-{frequency}-{periods}-"
+        f"{today}"
+    )
+    cached_data = r.get(cache_key)
+    if cached_data:
+        return json.loads(cached_data)
+
+    ticker = yf.Ticker(normalized_symbol)
+    if statement_type == "income":
+        dataframe = ticker.get_income_stmt(freq=frequency)
+    elif statement_type == "balance_sheet":
+        dataframe = ticker.get_balance_sheet(freq=frequency)
+    else:
+        dataframe = ticker.get_cash_flow(freq=frequency)
+
+    dataframe = dataframe.iloc[:, :periods]
+    period_results = []
+    for period_end in dataframe.columns:
+        metrics = {
+            str(metric): _json_safe_value(value)
+            for metric, value in dataframe[period_end].items()
+        }
+        period_results.append(
+            {
+                "period_end": period_end.strftime("%Y-%m-%d"),
+                "metrics": metrics,
+            }
+        )
+
+    result = {
+        "symbol": normalized_symbol,
+        "statement_type": statement_type,
+        "frequency": frequency,
+        "requested_periods": periods,
+        "returned_periods": len(period_results),
+        "periods": period_results,
+    }
+    r.set(cache_key, json.dumps(result), ex=12 * 60 * 60)
+    return result

@@ -1,11 +1,11 @@
 import enum
 import uuid
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     JSON,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     String,
@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SQLEnum,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -73,7 +73,7 @@ class DocumentChunk(Base):
     )
     chunk_index = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
-    embedding = Column(ARRAY(Float, dimensions=1), nullable=True)
+    embedding = Column(VECTOR(1536), nullable=True)
 
     # Denormalized attributes strictly used for fast vector search filtering
     filter_metadata = Column(JSON, default={})

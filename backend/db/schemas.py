@@ -43,7 +43,7 @@ class Document(Base):
         nullable=False,
         default=DocumentType.GENERIC,
     )
-    document_id = Column(String, nullable=False, unique=True)
+    reference_id = Column(String, nullable=False, unique=True)
     title = Column(String, nullable=False)
     source_url = Column(String)
     author = Column(String)
@@ -57,6 +57,7 @@ class Document(Base):
     chunks = relationship(
         "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
     )
+    filter_metadata = Column(JSON, default={})
 
 
 class DocumentChunk(Base):

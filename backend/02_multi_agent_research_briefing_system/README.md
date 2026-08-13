@@ -22,6 +22,6 @@ Output:
 Data sources:
 - [x] MARKET DATA: Yahoo finance API (https://github.com/ranaroussi/yfinance), Massive (https://massive.com/dashboard)
     - Close prices from 3mo ago to now
-- [x] FILINGS: Finnhub (https://finnhub.io/docs/api/filings)
-- EARNINGS TRANSCRIPTS: Finnhub (https://finnhub.io/docs/api/earnings-call-transcripts-api)
-- NEWS: Webz.io (https://webz.io/) or Newsapi (https://newsapi.org/)
+- [x] FILINGS: Edgar
+- [x] COMPANY PROFILE: Yahoo finance API
+- [x] NEWS: Marketaux or GNews API

@@ -36,7 +36,7 @@ def get_latest_filing(symbol: str):
         with db_utils.get_session() as session:
             # check db for latest filing first
             document, chunks = get_document_and_chunks(
-                session, document_id=accession_no, document_type=DocumentType.FILING
+                session, reference_id=accession_no, document_type=DocumentType.FILING
             )
 
             if document and chunks:
@@ -51,11 +51,12 @@ def get_latest_filing(symbol: str):
 
             metadata = {
                 "document_type": DocumentType.FILING,
-                "document_id": accession_no,
+                "reference_id": accession_no,
                 "title": f"{filing.company_name} - {filing.latest().form} - {filing.latest().filing_date}",
                 "source_url": filing.latest().url,
                 "author": filing.company_name,
                 "published_at": filing.latest().filing_date.isoformat(),
+                "metadata": {"symbol": symbol},
             }
 
             doc_id = insert_document(session, **metadata)

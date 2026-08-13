@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -23,6 +24,14 @@ def chunk_text_by_tokens(
     return chunks
 
 
+def check_should_embed(session, doc_uuid: str):
+    existing_chunks = (
+        session.query(schemas.DocumentChunk).filter_by(document_id=doc_uuid).first()
+    )
+
+    return bool(not existing_chunks)
+
+
 def embed_document_in_chunks(
     text: str, doc_id: str, chunk_size: int = 500, overlap: int = 50
 ) -> list[dict[str, Any]]:
@@ -46,19 +55,29 @@ def embed_document_in_chunks(
 def insert_document(
     session,
     document_type: schemas.DocumentType,
-    document_id: str,
+    reference_id: str,
     title: str,
     source_url: str,
     author: str,
     published_at: str,
+    metadata: Any | None,
 ):
+    existing_doc = (
+        session.query(schemas.Document).filter_by(reference_id=reference_id).first()
+    )
+
+    if existing_doc:
+        print(f"Document {reference_id} already exists.")
+        return existing_doc.id
+
     doc = schemas.Document(
         document_type=document_type,
-        document_id=document_id,
+        reference_id=reference_id,
         title=title,
         source_url=source_url,
         author=author,
         published_at=published_at,
+        filter_metadata=(metadata or {}),
     )
     session.add(doc)
     session.flush()
@@ -89,11 +108,11 @@ def insert_document_chunks(
 
 
 def get_document_and_chunks(
-    session, document_id: str, document_type: schemas.DocumentType
+    session, reference_id: str, document_type: schemas.DocumentType
 ) -> tuple[schemas.Document, list[schemas.DocumentChunk]] | None:
     document = (
         session.query(schemas.Document)
-        .filter_by(document_id=document_id, document_type=document_type)
+        .filter_by(reference_id=reference_id, document_type=document_type)
         .first()
     )
     if not document:
@@ -105,6 +124,36 @@ def get_document_and_chunks(
     return document, chunks
 
 
+def get_documents_by_type(
+    session,
+    document_type: schemas.DocumentType,
+    from_date: datetime,
+    metadata: Any = None,
+) -> list[dict]:
+    """Retrieve multiple documents and their chunks matching a type, date, and keyword."""
+    query = session.query(schemas.Document).filter(
+        schemas.Document.document_type == document_type,
+        schemas.Document.published_at >= from_date,
+    )
+
+    if metadata:
+        for key, value in metadata.items():
+            query = query.filter(
+                schemas.Document.filter_metadata[key].as_string() == str(value)
+            )
+
+    documents = query.all()
+
+    results = []
+    for doc in documents:
+        chunks = (
+            session.query(schemas.DocumentChunk).filter_by(document_id=doc.id).all()
+        )
+        results.append(serialize_document(doc, chunks))
+
+    return results
+
+
 def serialize_document(
     doc: schemas.Document,
     chunks: list[schemas.DocumentChunk] | None = None,
@@ -113,7 +162,7 @@ def serialize_document(
     """Serialize a Document and optional chunks into a JSON-safe dict."""
     out = {
         "id": str(doc.id),
-        "document_id": doc.document_id,
+        "reference_id": doc.reference_id,
         "document_type": doc.document_type.value
         if hasattr(doc.document_type, "value")
         else str(doc.document_type),

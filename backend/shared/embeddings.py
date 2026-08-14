@@ -1,8 +1,10 @@
+import uuid
 from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from sqlalchemy.orm import Session
 from tiktoken import get_encoding
 
 from backend.db import schemas
@@ -24,16 +26,16 @@ def chunk_text_by_tokens(
     return chunks
 
 
-def check_should_embed(session, doc_uuid: str):
+def check_should_embed(session: Session, doc_uuid: uuid.UUID) -> bool:
     existing_chunks = (
         session.query(schemas.DocumentChunk).filter_by(document_id=doc_uuid).first()
     )
 
-    return bool(not existing_chunks)
+    return existing_chunks is None
 
 
 def embed_document_in_chunks(
-    text: str, doc_id: str, chunk_size: int = 500, overlap: int = 50
+    text: str, doc_id: uuid.UUID, chunk_size: int = 500, overlap: int = 50
 ) -> list[dict[str, Any]]:
     chunks = chunk_text_by_tokens(text, chunk_size=chunk_size, overlap=overlap)
     response = client.embeddings.create(input=chunks, model="text-embedding-3-small")
@@ -53,15 +55,15 @@ def embed_document_in_chunks(
 
 
 def insert_document(
-    session,
+    session: Session,
     document_type: schemas.DocumentType,
     reference_id: str,
     title: str,
-    source_url: str,
-    author: str,
-    published_at: str,
-    metadata: Any | None,
-):
+    source_url: str | None,
+    author: str | None,
+    published_at: datetime | str | None,
+    metadata: dict[str, Any] | None,
+) -> uuid.UUID:
     existing_doc = (
         session.query(schemas.Document).filter_by(reference_id=reference_id).first()
     )
@@ -70,13 +72,19 @@ def insert_document(
         print(f"Document {reference_id} already exists.")
         return existing_doc.id
 
+    normalized_published_at = published_at
+    if isinstance(published_at, str):
+        normalized_published_at = datetime.fromisoformat(
+            published_at.replace("Z", "+00:00")
+        )
+
     doc = schemas.Document(
         document_type=document_type,
         reference_id=reference_id,
         title=title,
         source_url=source_url,
         author=author,
-        published_at=published_at,
+        published_at=normalized_published_at,
         filter_metadata=(metadata or {}),
     )
     session.add(doc)
@@ -87,10 +95,10 @@ def insert_document(
 
 
 def insert_document_chunks(
-    session,
+    session: Session,
     chunks_data: list[dict[str, Any]],
-    document_id: str,
-) -> list[schemas.DocumentChunk] | None:
+    document_id: uuid.UUID,
+) -> list[schemas.DocumentChunk]:
     chunks = [
         schemas.DocumentChunk(
             document_id=document_id,
@@ -108,8 +116,8 @@ def insert_document_chunks(
 
 
 def get_document_and_chunks(
-    session, reference_id: str, document_type: schemas.DocumentType
-) -> tuple[schemas.Document, list[schemas.DocumentChunk]] | None:
+    session: Session, reference_id: str, document_type: schemas.DocumentType
+) -> tuple[schemas.Document | None, list[schemas.DocumentChunk]]:
     document = (
         session.query(schemas.Document)
         .filter_by(reference_id=reference_id, document_type=document_type)
@@ -125,11 +133,11 @@ def get_document_and_chunks(
 
 
 def get_documents_by_type(
-    session,
+    session: Session,
     document_type: schemas.DocumentType,
     from_date: datetime,
-    metadata: Any = None,
-) -> list[dict]:
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Retrieve multiple documents and their chunks matching a type, date, and keyword."""
     query = session.query(schemas.Document).filter(
         schemas.Document.document_type == document_type,
@@ -158,7 +166,7 @@ def serialize_document(
     doc: schemas.Document,
     chunks: list[schemas.DocumentChunk] | None = None,
     source: str = "db",
-) -> dict:
+) -> dict[str, Any]:
     """Serialize a Document and optional chunks into a JSON-safe dict."""
     out = {
         "id": str(doc.id),

@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 import requests
 from dateutil import parser
@@ -21,7 +22,7 @@ def fetch_news(
     query: str,
     from_date: str,
     limit: int = 5,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch and normalize news articles without writing to the database."""
     api_key = os.getenv("GNEWS_API_KEY")
     if not api_key:
@@ -68,7 +69,7 @@ def ingest_news(
     query: str,
     from_date: str,
     limit: int = 5,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch, embed, and persist news articles for later retrieval."""
     articles = fetch_news(
         symbol=symbol,
@@ -108,6 +109,8 @@ def ingest_news(
                 )
 
             doc = session.get(schemas.Document, doc_uuid)
+            if doc is None:
+                raise RuntimeError(f"Document {doc_uuid} was not found after insertion")
             serialized_articles.append(
                 serialize_document(doc, created_chunks, source="gnews")
             )

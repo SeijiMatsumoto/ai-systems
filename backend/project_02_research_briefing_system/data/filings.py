@@ -1,8 +1,10 @@
 import json
 from datetime import date, datetime
+from typing import Any
 
 import redis
 from edgar import Company, set_identity
+from edgar.entity import EntityFiling, EntityFilings
 
 from backend.db import db_utils, schemas
 from backend.shared.embeddings import (
@@ -24,7 +26,7 @@ def fetch_filings(
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int = 1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch and normalize SEC filings without writing to the database."""
     if not 1 <= limit <= 10:
         raise ValueError("limit must be between 1 and 10")
@@ -62,7 +64,22 @@ def fetch_filings(
     if selected is None:
         return []
 
-    filings = [selected] if hasattr(selected, "accession_no") else list(selected)
+    filings: list[EntityFiling]
+    if isinstance(selected, EntityFiling):
+        filings = [selected]
+    else:
+        if isinstance(selected, EntityFilings):
+            candidates = [selected[index] for index in range(len(selected))]
+        elif isinstance(selected, list):
+            candidates = selected
+        else:
+            raise TypeError("EDGAR latest filings response had an unexpected type")
+
+        filings = []
+        for candidate in candidates:
+            if not isinstance(candidate, EntityFiling):
+                raise TypeError("EDGAR latest filings contained an unexpected item")
+            filings.append(candidate)
     normalized = [
         {
             "reference_id": filing.accession_no,
@@ -73,7 +90,7 @@ def fetch_filings(
             ),
             "source_url": filing.url,
             "author": matching_filings.company_name,
-            "published_at": filing.filing_date.isoformat(),
+            "published_at": filing.filing_date,
             "content": filing.text(),
         }
         for filing in filings
@@ -89,7 +106,7 @@ def ingest_filings(
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int = 1,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch, embed, and persist SEC filings for later retrieval."""
     filings = fetch_filings(
         symbol=symbol,
@@ -131,6 +148,8 @@ def ingest_filings(
             insert_document_chunks(session, embedded_chunks, doc_id)
 
             document = session.get(schemas.Document, doc_id)
+            if document is None:
+                raise RuntimeError(f"Document {doc_id} was not found after insertion")
             created_chunks = (
                 session.query(schemas.DocumentChunk).filter_by(document_id=doc_id).all()
             )

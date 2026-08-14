@@ -22,6 +22,7 @@ from backend.shared.rag_retrieval import retrieve_document_by_distance
 
 load_dotenv("backend/.env")
 
+
 class SearchDocumentsInput(BaseModel):
     query: str
     symbol: str
@@ -75,6 +76,12 @@ item must contain the source URL, title, publication date when available, an exa
 supporting quote or financial value, and the chunk or reference identifier when
 available. The executive summary must only summarize supported key findings rather
 than introduce new factual claims.
+
+For prefetched financial evidence, use reference_id company_snapshot:<SYMBOL> or
+close_data:<SYMBOL>, with field_path relative to that referenced object. For historical
+financial evidence, copy the reference_id returned by the historical_financials tool
+and use a field_path into the complete tool result, beginning with data.
+
 Clearly distinguish reported facts and financial values from your own analysis and
 forward-looking scenarios. Describe outlooks as conditional expectations, not facts
 or investment recommendations.
@@ -104,12 +111,21 @@ def search_documents(inputs: SearchDocumentsInput):
 @agent.tool_plain
 def historical_financials(inputs: FetchFinancialsInput):
     """Retrieve historical financial data for specified periods"""
-    return get_historical_financials(
-        symbol=inputs.symbol,
-        statement_type=inputs.statement_type,
-        frequency=inputs.frequency,
-        periods=inputs.periods,
+    symbol = inputs.symbol.strip().upper()
+    reference_id = (
+        f"historical_financials:{symbol}:"
+        f"{inputs.statement_type}:{inputs.frequency}:{inputs.periods}"
     )
+    return {
+        "reference_id": reference_id,
+        "parameters": inputs.model_dump(),
+        "data": get_historical_financials(
+            symbol=symbol,
+            statement_type=inputs.statement_type,
+            frequency=inputs.frequency,
+            periods=inputs.periods,
+        ),
+    }
 
 
 async def main():

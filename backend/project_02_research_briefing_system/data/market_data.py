@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pandas as pd
 import redis
@@ -10,6 +10,12 @@ r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 StatementType = Literal["income", "balance_sheet", "cash_flow"]
 FinancialFrequency = Literal["yearly", "quarterly"]
+
+
+def _format_date(value: object) -> str:
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d")
+    return str(value)
 
 
 def _json_safe_value(value):
@@ -38,14 +44,17 @@ def get_close_data(symbol: str) -> list[dict[str, str | float]]:
     print("Cache miss: calling yfinance api")
     # If cache miss, hit yfinance API
     df = yf.Ticker(symbol).history(period="3mo")
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("yfinance history response was not a DataFrame")
+    close_series = cast(pd.Series, df["Close"])
 
     # Normalize data into the same JSON-serializable shape returned by Redis.
     result = [
         {
-            "Date": date.strftime("%Y-%m-%d"),
-            "Close": round(float(close), 2),
+            "Date": _format_date(date),
+            "Close": round(float(cast(Any, close)), 2),
         }
-        for date, close in df["Close"].items()
+        for date, close in close_series.items()
     ]
 
     # Store in redis cache
@@ -135,6 +144,9 @@ def get_historical_financials(
     else:
         dataframe = ticker.get_cash_flow(freq=frequency)
 
+    if not isinstance(dataframe, pd.DataFrame):
+        raise TypeError("yfinance financial statement response was not a DataFrame")
+
     dataframe = dataframe.iloc[:, :periods]
     period_results = []
     for period_end in dataframe.columns:
@@ -144,7 +156,7 @@ def get_historical_financials(
         }
         period_results.append(
             {
-                "period_end": period_end.strftime("%Y-%m-%d"),
+                "period_end": _format_date(period_end),
                 "metrics": metrics,
             }
         )

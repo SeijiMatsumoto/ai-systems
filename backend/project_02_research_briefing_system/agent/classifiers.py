@@ -1,8 +1,9 @@
 from typing import TypeVar
 
+from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIResponsesModelSettings, ReasoningEffort
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
@@ -16,7 +17,7 @@ class QueryClassification(BaseModel):
 
 class GroundingClassification(BaseModel):
     is_supported: bool
-    reasoning: str = Field(max_length=20)
+    reasoning: str = Field(max_length=120)
 
 
 def create_classifier(

@@ -3,9 +3,12 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from pydantic_ai import UsageLimits
+from pydantic_ai.messages import ModelMessage, ToolReturnPart
 
 from backend.db import db_utils, schemas
 from backend.db.schemas import ResearchRun, ResearchRunStatus
@@ -23,7 +26,9 @@ from backend.project_02_research_briefing_system.agent.classifiers import (
 from backend.project_02_research_briefing_system.agent.models import (
     BriefingRequest,
     EvidenceItem,
+    GroundingFailure,
     ResearchBriefing,
+    ResearchWorkflowResult,
     VerificationResult,
 )
 from backend.project_02_research_briefing_system.data.market_data import (
@@ -63,24 +68,62 @@ def create_fingerprint(request: BriefingRequest) -> str:
     return hashlib.sha256(canonical_json.encode()).hexdigest()
 
 
-async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
+def collect_historical_financial_sources(
+    messages: Sequence[ModelMessage],
+) -> dict[str, object]:
+    sources: dict[str, object] = {}
+
+    for message in messages:
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            if part.tool_name != "historical_financials":
+                continue
+
+            payload = part.structured_content()
+            if not isinstance(payload, dict):
+                continue
+
+            reference_id = payload.get("reference_id")
+            if isinstance(reference_id, str):
+                sources[reference_id] = payload
+
+    return sources
+
+
+async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowResult:
     # 1. Normalize request and calculate fingerprint
+    run_id = None
     try:
         fingerprint = create_fingerprint(request)
         with db_utils.get_session() as session:
-            cached_run = (
+            existing_run = (
                 session.query(ResearchRun)
                 .filter(
                     ResearchRun.request_fingerprint == fingerprint,
-                    ResearchRun.status == ResearchRunStatus.COMPLETED,
+                    ResearchRun.status.in_(
+                        [
+                            ResearchRunStatus.PENDING,
+                            ResearchRunStatus.RUNNING,
+                            ResearchRunStatus.COMPLETED,
+                        ]
+                    ),
                 )
                 .order_by(ResearchRun.completed_at.desc())
                 .first()
             )
 
             # 2. Return a valid cached result when available
-            if cached_run:
-                return cached_run
+            if existing_run:
+                return ResearchWorkflowResult(
+                    run_id=existing_run.id,
+                    status=existing_run.status,
+                    briefing=(
+                        ResearchBriefing.model_validate(existing_run.briefing_payload)
+                        if existing_run.briefing_payload
+                        else None
+                    ),
+                )
 
         # 3. Create ResearchRun and insert initial
         now = datetime.now().astimezone()
@@ -91,7 +134,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
                 symbol=request.symbol,
                 as_of=request.as_of,
                 status="pending",
-                request_payload=json.dumps(request.model_dump(mode="json")),
+                request_payload=request.model_dump(mode="json"),
                 model_name=model_name,
                 prompt_version=prompt_version,
                 tool_version=tool_version,
@@ -103,12 +146,6 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
             run_id = research_run.id
 
         # 4. Run pre-agent request guardrails
-        # - Make sure symbol is at least 4 chars
-        # - Make sure as_of is before today
-        # - Make sure request.research_question is at least N characters and is appropriate (check for prompt injection)
-        if len(request.symbol) < 4:
-            raise ValueError(f"{request.symbol} does not meet length requirements!")
-
         if request.as_of > now:
             raise ValueError(f"{request.as_of} cannot be after today")
 
@@ -152,12 +189,12 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
         # 6. Invoke the autonomous agent
         briefing_request = BriefingRequest(
             symbol=request.symbol,
-            as_of=datetime.now().astimezone(),
+            as_of=request.as_of,
             research_question=request.research_question,
             audience=request.audience,
             time_horizon=request.time_horizon,
         )
-        request = {
+        agent_input = {
             **briefing_request.model_dump(mode="json"),
             "prefetched_context": {
                 "company_snapshot": company_snapshot,
@@ -166,7 +203,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
         }
         async with asyncio.timeout(120):
             result = await agent.run(
-                json.dumps(request, default=str),
+                json.dumps(agent_input, default=str),
                 usage_limits=UsageLimits(
                     request_limit=12,
                     tool_calls_limit=10,
@@ -177,13 +214,28 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
 
         # 7. Validate citations and grounding
         briefing = result.output
+        symbol = request.symbol.strip().upper()
+        financial_sources: dict[str, object] = {
+            f"company_snapshot:{symbol}": company_snapshot,
+            f"close_data:{symbol}": close_data,
+        }
+        financial_sources.update(
+            collect_historical_financial_sources(result.all_messages())
+        )
+
         verification = VerificationResult(approval_ready=True)
+        grounding_inputs = []
         with db_utils.get_session() as session:
             for index, finding in enumerate(briefing.key_findings):
                 valid_evidence = []
-
                 for evidence in finding.evidence:
-                    if validate_document_evidence(session, evidence):
+                    if evidence.evidence_type == "document":
+                        is_valid = validate_document_evidence(session, evidence)
+                    else:
+                        is_valid = validate_financial_evidence(
+                            evidence, financial_sources
+                        )
+                    if is_valid:
                         valid_evidence.append(evidence)
                     else:
                         verification.invalid_evidence_references.append(
@@ -194,25 +246,54 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchBriefing:
                     verification.unsupported_finding_indexes.append(index)
                     continue
 
-                grounding = await verify_finding(finding, valid_evidence)
+                grounding_inputs.append((index, finding, valid_evidence))
 
-                if not grounding.is_supported:
-                    verification.unsupported_finding_indexes.append(index)
+        for index, finding, valid_evidence in grounding_inputs:
+            grounding = await verify_finding(finding, valid_evidence)
 
+            if not grounding.is_supported:
+                verification.unsupported_finding_indexes.append(index)
+                verification.grounding_failures.append(
+                    GroundingFailure(finding_index=index, reason=grounding.reasoning)
+                )
+
+        verification.approval_ready = not any(
+            [
+                verification.unsupported_finding_indexes,
+                verification.invalid_evidence_references,
+            ]
+        )
         # 8. Save output, verification, and usage
-        # 9. Mark run completed or failed
-        # 10. Return briefing
-
-    except Exception as exc:
         with db_utils.get_session() as session:
             research_run = session.get(ResearchRun, run_id)
-            if research_run:
-                research_run.status = ResearchRunStatus.FAILED
-                research_run.error_payload = {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                }
-                research_run.completed_at = datetime.now(timezone.utc)
+
+            if research_run is None:
+                raise RuntimeError(f"Research run {run_id} not found")
+
+            research_run.briefing_payload = briefing.model_dump(mode="json")
+            research_run.verification_payload = verification.model_dump(mode="json")
+            research_run.usage_payload = asdict(result.usage)
+            research_run.status = ResearchRunStatus.COMPLETED
+            research_run.completed_at = datetime.now(timezone.utc)
+
+        # 9. Return briefing
+        return ResearchWorkflowResult(
+            run_id=research_run.id,
+            status=research_run.status,
+            briefing=(ResearchBriefing.model_validate(briefing) if briefing else None),
+        )
+
+    except Exception as exc:
+        if run_id is not None:
+            with db_utils.get_session() as session:
+                research_run = session.get(ResearchRun, run_id)
+                if research_run:
+                    research_run.status = ResearchRunStatus.FAILED
+                    research_run.error_payload = {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    research_run.completed_at = datetime.now(timezone.utc)
         raise
 
 
@@ -227,9 +308,14 @@ def validate_document_evidence(
     if evidence.chunk_id is None:
         return False
 
+    try:
+        chunk_id = uuid.UUID(evidence.chunk_id)
+    except ValueError:
+        return False
+
     chunk = session.get(
         schemas.DocumentChunk,
-        uuid.UUID(evidence.chunk_id),
+        chunk_id,
     )
     if chunk is None:
         return False
@@ -239,7 +325,43 @@ def validate_document_evidence(
     if document.reference_id != evidence.reference_id:
         return False
 
+    if not isinstance(evidence.content, str):
+        return False
+
     quote = normalize_text(evidence.content)
     source = normalize_text(chunk.content)
 
     return quote in source
+
+
+def validate_financial_evidence(
+    evidence: EvidenceItem, financial_sources: dict[str, object]
+):
+    source_data = financial_sources.get(evidence.reference_id)
+
+    if source_data is None or evidence.field_path is None:
+        return False
+
+    try:
+        actual_value = resolve_field_path(
+            source_data,
+            evidence.field_path,
+        )
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+    return actual_value == evidence.content
+
+
+def resolve_field_path(data: object, field_path: str) -> object:
+    current = data
+
+    for part in field_path.split("."):
+        if isinstance(current, dict):
+            current = current[part]
+        elif isinstance(current, list):
+            current = current[int(part)]
+        else:
+            raise TypeError(f"Cannot resolve {part!r} in field path {field_path!r}")
+
+    return current

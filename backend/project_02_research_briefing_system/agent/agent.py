@@ -1,5 +1,4 @@
 import asyncio
-import importlib
 import json
 from datetime import datetime
 from typing import Literal
@@ -10,19 +9,18 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelSettings, UsageLimits
 
 from backend.db import schemas
+from backend.project_02_research_briefing_system.agent.models import (
+    BriefingRequest,
+    ResearchBriefing,
+)
+from backend.project_02_research_briefing_system.data.market_data import (
+    get_close_data,
+    get_company_snapshot,
+    get_historical_financials,
+)
 from backend.shared.rag_retrieval import retrieve_document_by_distance
 
-from .models import BriefingRequest, ResearchBriefing
-
 load_dotenv("backend/.env")
-
-market_data_module = importlib.import_module(
-    "backend.02_multi_agent_research_briefing_system.data.market_data"
-)
-get_historical_financials = market_data_module.get_historical_financials
-get_close_data = market_data_module.get_close_data
-get_company_snapshot = market_data_module.get_company_snapshot
-
 
 class SearchDocumentsInput(BaseModel):
     query: str
@@ -46,8 +44,13 @@ class FetchFinancialsInput(BaseModel):
 logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic_ai()
 
+model_name = "openai:gpt-5.6-sol"
+prompt_version = 1.0
+tool_version = 1.0
+schema_version = 1.0
+
 agent = Agent(
-    "openai:gpt-5.6-sol",
+    model_name,
     output_type=ResearchBriefing,
     model_settings=ModelSettings(timeout=60.0),
     instructions="""
@@ -120,8 +123,10 @@ async def main():
         symbol=symbol,
         as_of=datetime.now().astimezone(),
         research_question=(
-            "What is Apple's current position and what are its most important "
-            "risks and catalysts over the next 12 months?"
+            """"
+            What is Apple's current position and what are its most
+            important risks and catalysts over the next 12 months?
+            """
         ),
         audience="investment analyst",
         time_horizon="12 months",

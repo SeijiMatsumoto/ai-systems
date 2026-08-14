@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SQLEnum,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -29,6 +29,15 @@ class DocumentType(str, enum.Enum):
     FILING = "filing"
     EARNINGS = "earnings"
     ARTICLE = "article"
+
+
+class ResearchRunStatus(str, enum.Enum):
+    """Lifecycle state for a research-agent run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class Document(Base):
@@ -80,3 +89,42 @@ class DocumentChunk(Base):
 
     # Relationship
     document = relationship("Document", back_populates="chunks")
+
+
+class ResearchRun(Base):
+    """One attempt to produce and verify a research briefing."""
+
+    __tablename__ = "research_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_fingerprint = Column(String(64), nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    as_of = Column(DateTime(timezone=True), nullable=False)
+    status = Column(
+        SQLEnum(
+            ResearchRunStatus,
+            name="research_run_status",
+            values_callable=lambda statuses: [status.value for status in statuses],
+        ),
+        nullable=False,
+        default=ResearchRunStatus.PENDING,
+        index=True,
+    )
+
+    # These payloads are validated by Pydantic at the application boundary.
+    request_payload = Column(JSONB, nullable=False)
+    briefing_payload = Column(JSONB, nullable=True)
+    verification_payload = Column(JSONB, nullable=True)
+    usage_payload = Column(JSONB, nullable=False, default=dict)
+    error_payload = Column(JSONB, nullable=True)
+
+    model_name = Column(String, nullable=False)
+    prompt_version = Column(String, nullable=False)
+    tool_version = Column(String, nullable=False)
+    schema_version = Column(String, nullable=False, default="1")
+
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)

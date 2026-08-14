@@ -8,17 +8,17 @@ The goal is not to repeat the same chatbot or RAG wrapper across several demos. 
 
 | # | System | Primary design focus | Status |
 |---|---|---|---|
-| 01 | [Automated Trading Strategy Backtester](backend/01_automated_trading_strategy_backtester/) | Code generation, sandboxed execution, and repair loops | Planned |
-| 02 | [Agentic Research & Briefing System](backend/02_multi_agent_research_briefing_system/) | Evidence-grounded research, tool orchestration, and human review | In progress |
-| 03 | [Continuous Portfolio Risk Sentinel](backend/03_continuous_portfolio_risk_sentinel/) | Long-running monitoring, memory, and escalation | Planned |
-| 04 | [Client Meeting Prep & Follow-Up Agent](backend/04_client_meeting_prep_follow_up_agent/) | Workflow orchestration and action tracking | Planned |
-| 05 | [Regulatory Change Impact Simulator](backend/05_regulatory_change_impact_simulator/) | RAG, impact analysis, and approval gates | Planned |
-| 06 | [Autonomous Incident Response Coordinator](backend/06_autonomous_incident_response_coordinator/) | Multi-agent diagnosis and controlled remediation | Planned |
-| 07 | [Personalized Financial Wellness Coach](backend/07_personalized_financial_wellness_coach/) | Long-term memory and adaptive planning | Planned |
-| 08 | [Cross-Team Knowledge Synthesis](backend/08_cross_team_knowledge_synthesis_decision_support/) | Continual synthesis, conflict detection, and knowledge graphs | Planned |
-| 09 | [Vendor Contract Negotiation Assistant](backend/09_vendor_contract_negotiation_assistant/) | Scenario analysis and human-in-the-loop iteration | Planned |
-| 10 | [Adaptive Fraud Pattern Hunter](backend/10_adaptive_fraud_pattern_hunter/) | Hypothesis generation, testing, and promotion gates | Planned |
-| 11 | [Goal-Driven Productivity Agent](backend/11_goal_driven_personal_productivity_agent/) | Goal decomposition, tool use, and replanning | Planned |
+| 01 | [Automated Trading Strategy Backtester](backend/project_01_automated_trading_strategy_backtester/) | Code generation, sandboxed execution, and repair loops | Planned |
+| 02 | [Agentic Research & Briefing System](backend/project_02_research_briefing_system/) | Evidence-grounded research, tool orchestration, and human review | In progress |
+| 03 | [Continuous Portfolio Risk Sentinel](backend/project_03_continuous_portfolio_risk_sentinel/) | Long-running monitoring, memory, and escalation | Planned |
+| 04 | [Client Meeting Prep & Follow-Up Agent](backend/project_04_client_meeting_prep_follow_up_agent/) | Workflow orchestration and action tracking | Planned |
+| 05 | [Regulatory Change Impact Simulator](backend/project_05_regulatory_change_impact_simulator/) | RAG, impact analysis, and approval gates | Planned |
+| 06 | [Autonomous Incident Response Coordinator](backend/project_06_autonomous_incident_response_coordinator/) | Multi-agent diagnosis and controlled remediation | Planned |
+| 07 | [Personalized Financial Wellness Coach](backend/project_07_personalized_financial_wellness_coach/) | Long-term memory and adaptive planning | Planned |
+| 08 | [Cross-Team Knowledge Synthesis](backend/project_08_cross_team_knowledge_synthesis_decision_support/) | Continual synthesis, conflict detection, and knowledge graphs | Planned |
+| 09 | [Vendor Contract Negotiation Assistant](backend/project_09_vendor_contract_negotiation_assistant/) | Scenario analysis and human-in-the-loop iteration | Planned |
+| 10 | [Adaptive Fraud Pattern Hunter](backend/project_10_adaptive_fraud_pattern_hunter/) | Hypothesis generation, testing, and promotion gates | Planned |
+| 11 | [Goal-Driven Productivity Agent](backend/project_11_goal_driven_personal_productivity_agent/) | Goal decomposition, tool use, and replanning | Planned |
 
 ## Repository Structure
 

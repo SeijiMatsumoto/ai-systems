@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS research_runs (
     verification_payload JSONB,
     usage_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     error_payload JSONB,
+    checkpoint_stage VARCHAR(50),
+    checkpoint_payload JSONB,
+    trace_id VARCHAR(32),
 
     model_name VARCHAR NOT NULL,
     prompt_version VARCHAR NOT NULL,

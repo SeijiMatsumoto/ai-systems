@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE research_runs
+    ADD COLUMN IF NOT EXISTS trace_id VARCHAR(32);
+
+COMMIT;

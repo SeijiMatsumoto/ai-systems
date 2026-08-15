@@ -1,15 +1,33 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any, Literal, cast
 
 import pandas as pd
 import redis
 import yfinance as yf
+from curl_cffi.requests.exceptions import RequestException
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+from yfinance.exceptions import YFRateLimitError
 
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
+logger = logging.getLogger(__name__)
 StatementType = Literal["income", "balance_sheet", "cash_flow"]
 FinancialFrequency = Literal["yearly", "quarterly"]
+
+retry_yfinance = retry(
+    retry=retry_if_exception_type((RequestException, YFRateLimitError, TimeoutError)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 
 
 def _format_date(value: object) -> str:
@@ -28,6 +46,7 @@ def _json_safe_value(value):
     return str(value)
 
 
+@retry_yfinance
 def get_close_data(symbol: str) -> list[dict[str, str | float]]:
     # To be prefetched
     today = datetime.today().strftime("%Y-%m-%d")  # noqa: DTZ002
@@ -38,10 +57,16 @@ def get_close_data(symbol: str) -> list[dict[str, str | float]]:
 
     # If cache hit, return data
     if cached_data:
-        print("Cache hit!")
+        logger.info(
+            "market_data_cache_hit dataset=close_data symbol=%s",
+            symbol.upper(),
+        )
         return json.loads(cached_data)
 
-    print("Cache miss: calling yfinance api")
+    logger.info(
+        "market_data_cache_miss dataset=close_data symbol=%s",
+        symbol.upper(),
+    )
     # If cache miss, hit yfinance API
     df = yf.Ticker(symbol).history(period="3mo")
     if not isinstance(df, pd.DataFrame):
@@ -64,6 +89,7 @@ def get_close_data(symbol: str) -> list[dict[str, str | float]]:
     return result
 
 
+@retry_yfinance
 def get_company_snapshot(symbol: str) -> dict:
     # To be prefetched
     cache_key = f"snapshot-{symbol}"
@@ -71,8 +97,16 @@ def get_company_snapshot(symbol: str) -> dict:
     cached_data = r.get(cache_key)
 
     if cached_data:
-        print("Cache hit!")
+        logger.info(
+            "market_data_cache_hit dataset=company_snapshot symbol=%s",
+            symbol.upper(),
+        )
         return json.loads(cached_data)
+
+    logger.info(
+        "market_data_cache_miss dataset=company_snapshot symbol=%s",
+        symbol.upper(),
+    )
 
     ticker = yf.Ticker(symbol)
     info = ticker.info
@@ -109,6 +143,7 @@ def get_company_snapshot(symbol: str) -> dict:
     return snapshot
 
 
+@retry_yfinance
 def get_historical_financials(
     symbol: str,
     statement_type: StatementType = "income",
@@ -118,9 +153,7 @@ def get_historical_financials(
     """Fetch historical financial statements in a period-first JSON shape."""
     valid_statement_types = {"income", "balance_sheet", "cash_flow"}
     if statement_type not in valid_statement_types:
-        raise ValueError(
-            "statement_type must be income, balance_sheet, or cash_flow"
-        )
+        raise ValueError("statement_type must be income, balance_sheet, or cash_flow")
     if frequency not in {"yearly", "quarterly"}:
         raise ValueError("frequency must be yearly or quarterly")
     if not 1 <= periods <= 8:
@@ -129,8 +162,7 @@ def get_historical_financials(
     normalized_symbol = symbol.upper()
     today = datetime.today().strftime("%Y-%m-%d")  # noqa: DTZ002
     cache_key = (
-        f"financials-{normalized_symbol}-{statement_type}-{frequency}-{periods}-"
-        f"{today}"
+        f"financials-{normalized_symbol}-{statement_type}-{frequency}-{periods}-{today}"
     )
     cached_data = r.get(cache_key)
     if cached_data:

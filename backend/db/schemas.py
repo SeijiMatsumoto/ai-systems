@@ -29,7 +29,6 @@ class DocumentType(str, enum.Enum):
 
     GENERIC = "generic"
     FILING = "filing"
-    EARNINGS = "earnings"
     ARTICLE = "article"
 
 
@@ -141,6 +140,13 @@ class ResearchRun(Base):
         JSONB, nullable=False, default=dict
     )
     error_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    checkpoint_stage: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    checkpoint_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     model_name: Mapped[str] = mapped_column(String, nullable=False)
     prompt_version: Mapped[str] = mapped_column(String, nullable=False)

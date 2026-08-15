@@ -1,616 +1,1021 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react'
 
-interface Project {
-  id: string;
-  number: string;
-  title: string;
-  category: string;
-  problem: string;
-  outcome: string;
-  backendPort: number;
-  status: 'Not Started' | 'Running' | 'Completed' | 'Error';
-  apiPath: string;
-  defaultInput: string;
-  inputLabel: string;
-  inputPlaceholder: string;
+import { backfillCompany, getResearchRun, getResearchRuns, runResearch } from './api'
+import type {
+  BackfillRequest,
+  BackfillResult,
+  BriefingRequest,
+  EvidenceItem,
+  Finding,
+  ResearchRunDetail,
+  ResearchRunSummary,
+  ResearchWorkflowResult,
+} from './types'
+
+type WorkspaceMode = 'user' | 'admin'
+
+interface ToolDefinition {
+  id: string
+  number: string
+  title: string
+  shortTitle: string
+  category: string
+  description: string
+  availability: 'ready' | 'planned'
 }
 
-const PROJECTS: Project[] = [
+const TOOLS: ToolDefinition[] = [
   {
     id: 'backtester',
     number: '01',
-    title: 'Automated Trading Strategy Backtester',
+    title: 'Strategy Backtester',
+    shortTitle: 'Backtester',
     category: 'Finance',
-    problem: 'Quantitative researchers spend hours translating investment ideas into Python backtesting code (e.g., using libraries like Pandas or Backtrader). They often waste time fixing syntax errors, handling missing data, or adjusting parameters to make the script run.',
-    outcome: 'A web app where a user describes a trading strategy in plain English, and an agent compiles the script, executes it, self-corrects any code tracebacks, and returns Sharpe ratios and backtest charts.',
-    backendPort: 8001,
-    status: 'Not Started',
-    apiPath: 'api/backtest',
-    defaultInput: 'Buy AAPL when the 50-day moving average crosses above the 200-day moving average, and sell when it crosses below. Start with $100,000.',
-    inputLabel: 'Strategy Prompt',
-    inputPlaceholder: 'Describe your trading strategy...'
+    description: 'Translate investment ideas into executable, self-correcting backtests.',
+    availability: 'planned',
   },
   {
-    id: 'researcher',
+    id: 'research',
     number: '02',
-    title: 'Multi-Agent Research & Briefing System',
-    category: 'Finance / Client-Facing',
-    problem: 'Analysts and clients spend hours piecing together fragmented market, company, and regulatory information from filings, news, and internal notes.',
-    outcome: 'An agent team that autonomously plans research, retrieves and synthesizes information (RAG over proprietary + public sources), debates findings, and produces a polished, cited briefing that a human can approve or refine before delivery.',
-    backendPort: 8002,
-    status: 'Not Started',
-    apiPath: 'api/research',
-    defaultInput: 'Briefing on Nvidia (NVDA) Q2 growth, recent regulatory scrutiny, and competitor chip launches (AMD/Intel).',
-    inputLabel: 'Research Subject / Prompt',
-    inputPlaceholder: 'Enter company, industry, or regulatory subject to research...'
+    title: 'Research Briefing',
+    shortTitle: 'Research',
+    category: 'Finance',
+    description: 'Produce cited company research with deterministic evidence verification.',
+    availability: 'ready',
   },
   {
-    id: 'risk_sentinel',
+    id: 'risk-sentinel',
     number: '03',
-    title: 'Continuous Portfolio Risk Sentinel',
-    category: 'Finance / Internal Ops',
-    problem: 'Risk teams are flooded with alerts and struggle to distinguish noise from material emerging risks across positions, counterparties, and market regimes.',
-    outcome: 'A looping agent that continuously monitors data streams, maintains memory of prior risk theses, runs scenario probes, escalates only high-conviction issues, and requests human judgment (HITL) when uncertainty or policy thresholds are crossed.',
-    backendPort: 8003,
-    status: 'Not Started',
-    apiPath: 'api/risk',
-    defaultInput: 'Monitor US High Yield Bond Portfolio for exposure to regional banking credit spread spikes.',
-    inputLabel: 'Portfolio / Asset Scope',
-    inputPlaceholder: 'Define portfolio positions or risk parameters to monitor...'
+    title: 'Portfolio Risk Sentinel',
+    shortTitle: 'Risk Sentinel',
+    category: 'Risk',
+    description: 'Monitor portfolio signals and escalate material changes for review.',
+    availability: 'planned',
   },
   {
-    id: 'reg_change',
+    id: 'regulatory-impact',
     number: '04',
-    title: 'Regulatory Change Impact Simulator',
+    title: 'Regulatory Impact',
+    shortTitle: 'Regulatory',
     category: 'Compliance',
-    problem: 'New rules arrive frequently; mapping them to existing products, processes, and controls is slow and error-prone.',
-    outcome: 'An agent that ingests regulatory text (RAG), maps obligations to the firm’s inventory, simulates downstream process and system impacts, proposes control changes, and routes high-impact items for human sign-off before any implementation.',
-    backendPort: 8004,
-    status: 'Not Started',
-    apiPath: 'api/compliance',
-    defaultInput: 'Analyze the impact of the SEC Rule 10b-5 amendments on insider trading compliance for cross-border equities.',
-    inputLabel: 'Regulation Document / Rule',
-    inputPlaceholder: 'Enter regulation text or rule reference...'
+    description: 'Map regulatory changes to systems, controls, and operating processes.',
+    availability: 'planned',
   },
   {
-    id: 'incident_coordinator',
+    id: 'incident-response',
     number: '05',
-    title: 'Autonomous Incident Response Coordinator',
-    category: 'Internal / Ops',
-    problem: 'Production incidents require rapid triage across logs, metrics, recent changes, and on-call knowledge, often with incomplete context.',
-    outcome: 'A multi-agent system that detects anomalies, gathers evidence, hypothesizes root causes, proposes and (with HITL gates) executes remediation steps, updates runbooks, and generates a post-mortem draft.',
-    backendPort: 8005,
-    status: 'Not Started',
-    apiPath: 'api/incident',
-    defaultInput: 'CRITICAL: Database connection pool exhaustion detected in billing-service-prod.',
-    inputLabel: 'Incident Log / Alert',
-    inputPlaceholder: 'Paste incident webhook data or error messages...'
+    title: 'Incident Coordinator',
+    shortTitle: 'Incidents',
+    category: 'Operations',
+    description: 'Coordinate evidence gathering, diagnosis, and human-approved remediation.',
+    availability: 'planned',
   },
   {
-    id: 'financial_wellness',
+    id: 'financial-coach',
     number: '06',
-    title: 'Personalized Financial Wellness Coach',
-    category: 'Consumer / External',
-    problem: 'Retail users struggle to turn scattered financial data and goals into coherent, adaptive plans that evolve with life events.',
-    outcome: 'An agent that maintains long-term memory of the user’s situation, retrieves relevant knowledge, plans multi-step strategies (budgeting, debt, investing), checks in periodically, adapts when new data arrives, and surfaces decisions for user confirmation.',
-    backendPort: 8006,
-    status: 'Not Started',
-    apiPath: 'api/coach',
-    defaultInput: 'User: John, 34. Goal: Buy a home in 3 years with $40k down. Debt: $12k student loans at 4.5%. Income: $85k.',
-    inputLabel: 'User Goal Profile',
-    inputPlaceholder: 'Enter age, income, debts, and key financial goals...'
+    title: 'Financial Wellness',
+    shortTitle: 'Wellness',
+    category: 'Consumer',
+    description: 'Turn personal financial context into an adaptive, explainable plan.',
+    availability: 'planned',
   },
   {
-    id: 'knowledge_synthesis',
+    id: 'knowledge-synthesis',
     number: '07',
-    title: 'Cross-Team Knowledge Synthesis & Decision Support',
-    category: 'Internal Ops',
-    problem: 'Critical institutional knowledge is siloed across teams; decision-makers lack a living synthesis that updates as new information appears.',
-    outcome: 'A looping agent that continuously crawls internal sources (RAG), identifies emerging themes and conflicts, maintains a living knowledge graph of key decisions and rationales, and proactively briefs stakeholders while flagging areas that need human resolution.',
-    backendPort: 8007,
-    status: 'Not Started',
-    apiPath: 'api/knowledge',
-    defaultInput: 'Crawl project-alpha and project-beta folders to detect API deprecation conflicts.',
-    inputLabel: 'Data Sources / Scope',
-    inputPlaceholder: 'Specify directories, Slack channels, or document buckets to sync...'
+    title: 'Knowledge Synthesis',
+    shortTitle: 'Knowledge',
+    category: 'Operations',
+    description: 'Surface decisions, conflicts, and dependencies across team knowledge.',
+    availability: 'planned',
   },
   {
-    id: 'vendor_negotiator',
+    id: 'contract-negotiation',
     number: '08',
-    title: 'Vendor & Contract Negotiation Assistant',
-    category: 'Internal Procurement',
-    problem: 'Negotiations drag because historical terms, market benchmarks, risk clauses, and internal preferences are hard to surface and reconcile in real time.',
-    outcome: 'An agent that retrieves prior contracts and playbooks (RAG), models negotiation scenarios, drafts clause alternatives, tracks counterparty responses, and loops with the human negotiator until terms are acceptable or escalated.',
-    backendPort: 8008,
-    status: 'Not Started',
-    apiPath: 'api/negotiate',
-    defaultInput: 'Contract: SaaS subscription renewal with Datadog. Rate hike: 8%. Preferred maximum: 5%.',
-    inputLabel: 'Negotiation Goal',
-    inputPlaceholder: 'Enter vendor, renewal contract terms, and company limits...'
+    title: 'Contract Negotiation',
+    shortTitle: 'Contracts',
+    category: 'Procurement',
+    description: 'Retrieve precedent and model negotiation options within policy boundaries.',
+    availability: 'planned',
   },
   {
-    id: 'fraud_hunter',
+    id: 'fraud-patterns',
     number: '09',
-    title: 'Adaptive Fraud Pattern Hunter',
-    category: 'Risk / Compliance',
-    problem: 'Static rules and simple models lag behind evolving fraud tactics; investigators drown in false positives.',
-    outcome: 'An agent that explores transaction and behavioral data, proposes and tests new pattern hypotheses in a sandbox, maintains a memory of successful and failed detections, and only promotes high-precision patterns after human review (HITL).',
-    backendPort: 8009,
-    status: 'Not Started',
-    apiPath: 'api/fraud',
-    defaultInput: 'Analyze transaction batches for multi-device login activity within 5 minutes followed by small, recurring utility bills.',
-    inputLabel: 'Suspicious Behavior Pattern to Test',
-    inputPlaceholder: 'Describe fraud hypothesis or parameters...'
+    title: 'Fraud Pattern Hunter',
+    shortTitle: 'Fraud',
+    category: 'Risk',
+    description: 'Test behavioral fraud hypotheses before promoting detection rules.',
+    availability: 'planned',
   },
   {
-    id: 'productivity_agent',
+    id: 'productivity',
     number: '10',
-    title: 'Goal-Driven Personal Productivity Agent',
-    category: 'Employee-Facing',
-    problem: 'Professionals juggle projects, meetings, and learning goals with no coherent system that plans, prioritizes, and adapts across tools.',
-    outcome: 'An agent that understands high-level goals, breaks them into plans, interacts with calendars/email/task systems, reflects on progress in loops, requests clarification or approval when needed, and continuously re-plans as priorities shift.',
-    backendPort: 8010,
-    status: 'Not Started',
-    apiPath: 'api/productivity',
-    defaultInput: 'Goal: Publish a technical blog post on Python Agents by Friday, while keeping calendar clear of non-urgent meetings.',
-    inputLabel: 'High-Level Goal',
-    inputPlaceholder: 'Enter personal or project goals...'
-  }
-];
+    title: 'Productivity Agent',
+    shortTitle: 'Productivity',
+    category: 'Work',
+    description: 'Plan and adapt work across goals, calendar constraints, and priorities.',
+    availability: 'planned',
+  },
+]
 
-const MOCK_TRACES: Record<string, string[]> = {
-  backtester: [
-    '[INFO] Parsing user prompt: "Buy AAPL when 50-day moving average crosses above 200-day moving average..."',
-    '[STEP 1/4] Writing pandas/backtrader backtest python script...',
-    '[INFO] Created backtest script in path /tmp/backtester_run.py',
-    '[STEP 2/4] Executing python backtest script against historical market database...',
-    '[ERROR] Traceback (most recent call last):\n  File "/tmp/backtester_run.py", line 14, in <module>\n    df["MA50"] = df["Close"].rolling(window=50).mean()\nNameError: name \'df\' is not defined',
-    '[WARNING] Script execution failed. Activating self-correction agent...',
-    '[STEP 3/4] Parsing error trace: Identifier \'df\' was used before loading dataset. Correcting backtest code...',
-    '[INFO] Rewrote code block: Loading historical ticker data (AAPL) into DataFrame \'df\'...',
-    '[STEP 4/4] Executing corrected backtest script...',
-    '[SUCCESS] Python script completed execution with exit code 0.',
-    '[INFO] Compiling backtest stats and graphing returns curve...'
-  ],
-  researcher: [
-    '[INFO] Subject query received: "Briefing on Nvidia Q2 growth and AMD chip launches..."',
-    '[STEP 1/4] Planner agent breaking task into research objectives: SEC EDGAR filings, analyst releases, and news RSS.',
-    '[STEP 2/4] Analyst Agent 1 (EDGAR Searcher) downloading Nvidia Q2 10-Q filing...',
-    '[STEP 3/4] Analyst Agent 2 (News Searcher) fetching tech news and benchmark datasets on AMD MI300X chips...',
-    '[STEP 4/4] Synthesis Agent identifying potential risks (US export restrictions, supply chain constraints)...',
-    '[DEBATE] Agent 1 and Agent 2 comparing Nvidia margin growth assumptions... resolving conflict.',
-    '[SUCCESS] Draft briefing generated.'
-  ],
-  risk_sentinel: [
-    '[INFO] Initializing portfolio monitoring sentinel loop...',
-    '[STEP 1/3] Fetching real-time regional bank credit spreads and corporate bond yields...',
-    '[STEP 2/3] Correlating spreads with credit default swap (CDS) databases...',
-    '[WARNING] Volatility spike detected in counterparties matching regional banking profile.',
-    '[STEP 3/3] Running Monte Carlo scenario simulations for US High Yield Bond Portfolio...',
-    '[WARNING] Value-at-Risk (VaR) threshold of 5% breached under liquidity squeeze scenarios.',
-    '[HITL] Flagging account positions and drafting rebalancing recommendation for risk officer review...'
-  ],
-  reg_change: [
-    '[INFO] Reading regulation reference: "SEC Rule 10b-5 amendments"...',
-    '[STEP 1/4] Ingesting text and fetching internal company controls directory via semantic RAG...',
-    '[STEP 2/4] Identifying impacted compliance areas: Employee pre-clearance rules and daily transaction reporting.',
-    '[STEP 3/4] Modeling transaction impact: Regulatory penalty simulation under existing reporting timelines.',
-    '[STEP 4/4] Creating proposed controls revisions and drafting operational compliance brief...'
-  ],
-  incident_coordinator: [
-    '[ALERT] Primary Alert: "Database Connection Pool Exhausted" on service: Billing.',
-    '[STEP 1/5] Initiating root cause analysis agent workflow...',
-    '[STEP 2/5] Inspecting service telemetry: Billing database connections spiked from 20 to 100 in 3 minutes.',
-    '[STEP 3/5] Inspecting Git history: Found deploy commit #a8c2f10 "Added billing retry loop" completed 15m ago.',
-    '[STEP 4/5] Running mock database trace: Identified unclosed transactions in connection pool retry loop.',
-    '[WARNING] Critical issue: Retry loop fails to release DB connection on connection error.',
-    '[STEP 5/5] Recommending mitigation: Revert deploy #a8c2f10 or increase connection pool capacity temporarily.'
-  ],
-  financial_wellness: [
-    '[INFO] Loading user financial profile from long-term session memory...',
-    '[STEP 1/3] Querying historical savings rates and debt amortization schemas...',
-    '[STEP 2/3] Generating debt payoff plan comparison (Snowball vs. Avalanche)...',
-    '[STEP 3/3] Drafting personal coaching roadmap and budget suggestions...',
-    '[SUCCESS] Budget roadmap updated.'
-  ],
-  knowledge_synthesis: [
-    '[INFO] Scanning files and corporate chat history directories...',
-    '[STEP 1/4] Extracting meeting minutes, Slack logs, and updated confluence specs...',
-    '[STEP 2/4] Entity mapping: Identifying overlaps in public APIs and core backend contracts...',
-    '[WARNING] Timeline Conflict: Team A deprecating API Endpoint v1 on Oct 1; Team B deployment relies on v1 until Dec 15.',
-    '[STEP 3/4] Updating Knowledge Graph schema...',
-    '[STEP 4/4] Drafting notification brief for product leads to reconcile project timelines...'
-  ],
-  vendor_negotiator: [
-    '[INFO] Initializing contract negotiation workbook...',
-    '[STEP 1/3] Parsing Datadog contract terms and comparing against company procurement playbook...',
-    '[STEP 2/3] Running RAG search for historical benchmarks: Found similar renewals negotiated at 4.2% rate hike.',
-    '[STEP 3/3] Drafting email response: Refusing 8% increase, offering 4.5% backed by volume discount clauses...'
-  ],
-  fraud_hunter: [
-    '[INFO] Scanning sandbox database logs (past 100,000 transactions)...',
-    '[STEP 1/4] Querying behavior records for multi-device logins...',
-    '[STEP 2/4] Generating fraud threat hypothesis signature...',
-    '[STEP 3/4] Running signature test in sandbox: Yielded 98.4% precision and flagged 14 unknown fraudulent sessions.',
-    '[STEP 4/4] Storing threat model rule and formatting dashboard card for risk analyst sign-off...'
-  ],
-  productivity_agent: [
-    '[INFO] Ingesting worker goal: "Publish Python portfolio post by Friday"...',
-    '[STEP 1/4] Querying Google Calendar and Outlook email queues...',
-    '[STEP 2/4] Auto-identifying non-essential events: Rescheduled internal feedback sync...',
-    '[STEP 3/4] Blocking 3-hour focused deep-work time blocks in calendar...',
-    '[STEP 4/4] Compiling task list and checklist card...'
-  ]
-};
+const LOGFIRE_PROJECT_URL =
+  import.meta.env.VITE_LOGFIRE_PROJECT_URL ??
+  'https://logfire-us.pydantic.dev/seijim27/ai-systems'
 
-const MOCK_OUTPUTS: Record<string, string> = {
-  backtester: `=== BACKTEST RESULTS ===
-Strategy: Simple SMA Crossover (50, 200)
-Asset: AAPL (Apple Inc.)
-Period: 2021-01-01 to 2026-01-01
-Initial Capital: $100,000.00
-Final Capital: $223,450.12
-Total Return: +123.45%
-Annualized Return: 24.69%
-Sharpe Ratio: 1.84
-Max Drawdown: -12.4%
-Trades Executed: 14
+function toolFromLocation(): ToolDefinition | null {
+  const toolId = new URLSearchParams(window.location.search).get('tool')
+  return TOOLS.find((tool) => tool.id === toolId) ?? null
+}
 
-=== AUTO-FIXED CODE CODE===
-import pandas as pd
-import numpy as np
+function localDateTimeValue(): string {
+  const date = new Date(Date.now() - 60_000)
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
 
-def run_backtest():
-    # Load historical market data
-    df = pd.read_csv('AAPL_data.csv')
-    df['MA50'] = df['Close'].rolling(window=50).mean()
-    df['MA200'] = df['Close'].rolling(window=200).mean()
-    ...
-    # Strategy successfully verified and run
-`,
-  researcher: `# RESEARCH BRIEFING: NVIDIA (NVDA) GROWTH & AMD COMPETITION
-**Date:** August 12, 2026
-**Analysts:** Market Research Team (Multi-Agent)
+function localDateTimeFromIso(value: string): string {
+  const date = new Date(value)
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
 
-## Executive Summary
-Nvidia Corporation (NVDA) continues to dominate the AI hardware space, reporting record-breaking Q2 revenue. However, mounting regulatory scrutiny on cross-border GPU exports and the commercial deployment of AMD’s MI300X chips introduce key structural risks.
+function dateValue(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
 
-## Key Findings
-- **Financial Growth:** NVDA Q2 revenue reached $32.4B (+15% QoQ), driven by Blackwell chip demand.
-- **AMD Threat:** AMD MI300X shipments increased 24% this quarter, offering an attractive performance-per-dollar ratio for LLM inference workloads.
-- **Export Risks:** Recent updates to EU/US trade compliance schemas require additional licensing steps for sales in Southeast Asia, impacting projected Q4 revenue.
+const DEFAULT_RESEARCH_REQUEST: BriefingRequest = {
+  symbol: 'AAPL',
+  as_of: localDateTimeValue(),
+  research_question:
+    "What are Apple's primary business risks, and which are most consequential for investors over the next 12 months?",
+  audience: 'investors',
+  time_horizon: '12m',
+}
 
-*Sources cited: SEC Filing 10-Q (Aug 2026), tech-logs.com chip benchmarks.*
-`,
-  risk_sentinel: `=== RISK SENTINEL ALERT ===
-[HIGH CONVICTION] Credit Volatility Spike
+const DEFAULT_BACKFILL_REQUEST: BackfillRequest = {
+  symbol: 'AAPL',
+  company_name: 'Apple Inc.',
+  from_date: dateValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)),
+  as_of: dateValue(new Date()),
+  include_filings: true,
+  include_news: true,
+  include_8k: true,
+}
 
-**Threat Index:** 8.4/10
-**Target Portfolio:** US High Yield Bond Portfolio
-**Asset Class:** Corporate Debt
+function formatDate(value: string | null): string {
+  if (!value) return 'Not available'
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value))
+}
 
-**Analysis:** Regional banking credit spreads have widened by 48bps in the past 48 hours. Historical correlations suggest an increased probability of liquidity contractions affecting mid-tier financial bonds.
-**Estimated Portfolio VaR Impact:** +$420,000 potential draw under stress.
+function buildLogfireUrl(traceId: string): string {
+  const query = new URLSearchParams({
+    q: `trace_id='${traceId}'`,
+    last: '14d',
+  })
+  return `${LOGFIRE_PROJECT_URL}/?${query.toString()}`
+}
 
-**Suggested Actions:**
-1. Reduce regional bank exposure by 12%.
-2. Hedging: Purchase credit default swaps (CDS) index options.
-`,
-  reg_change: `# REGULATORY COMPLIANCE ASSESSMENT: SEC RULE 10B-5
-**Obligation Type:** Transaction Reporting & Insider Trade Safeguards
+function StatusPill({ status }: { status: string }) {
+  const normalized = status.toLowerCase().replaceAll('_', '-')
+  return <span className={`status-pill status-${normalized}`}>{status}</span>
+}
 
-## Simulated System Impact
-- **Systems Affected:** Core Transaction Broker (Equities API), Compliance Auditor DB.
-- **Operational Risk:** Delaying daily reporting files under the new rule results in immediate warnings and potential fines.
+function AppHeader({ onHome }: { onHome: () => void }) {
+  return (
+    <header className="app-header">
+      <button className="brand-button" type="button" onClick={onHome}>
+        <span className="brand-mark">AS</span>
+        <span>
+          <strong>AI Systems</strong>
+          <small>Applied agent engineering</small>
+        </span>
+      </button>
+      <div className="header-meta">
+        <span className="live-indicator" aria-hidden="true" />
+        Local workspace
+      </div>
+    </header>
+  )
+}
 
-## Recommended Process Revisions
-1. **Control Point 4.1:** Shift transaction log sync from nightly batch jobs to real-time webhook streaming.
-2. **Control Point 7.2:** Auto-revoke API key access for designated insiders 15 days before quarterly earnings release.
-`,
-  incident_coordinator: `# INCIDENT DIAGNOSTIC REPORT: INC-094
-**Target Service:** Billing Database Prod
-**Status:** Resolved (Mock Action Triggered)
+function ToolRail({
+  selectedId,
+  onSelect,
+}: {
+  selectedId: string | null
+  onSelect: (tool: ToolDefinition) => void
+}) {
+  return (
+    <aside className="tool-rail">
+      <div className="rail-heading">
+        <span>Tools</span>
+        <span>{TOOLS.length.toString().padStart(2, '0')}</span>
+      </div>
+      <nav className="tool-nav" aria-label="AI system tools">
+        {TOOLS.map((tool) => (
+          <button
+            className={`tool-nav-item ${selectedId === tool.id ? 'active' : ''}`}
+            key={tool.id}
+            onClick={() => onSelect(tool)}
+            type="button"
+          >
+            <span className="tool-nav-number">{tool.number}</span>
+            <span className="tool-nav-copy">
+              <strong>{tool.shortTitle}</strong>
+              <small>{tool.category}</small>
+            </span>
+            <span
+              className={`availability-dot ${tool.availability}`}
+              title={tool.availability === 'ready' ? 'Available' : 'Planned'}
+            />
+          </button>
+        ))}
+      </nav>
+      <div className="rail-footer">
+        <span className="availability-dot ready" />
+        1 tool available
+      </div>
+    </aside>
+  )
+}
 
-## Timeline & Root Cause
-- **12:20 PM:** Billing service database connection count spiked to 100/100.
-- **12:25 PM:** Microservices calling 'Billing' returned 500 status.
-- **Analysis:** Commit #a8c2f10 introduced a retry loop that failed to release database connections during intermittent network drops, causing a resource leak.
+function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void }) {
+  return (
+    <section className="catalog-view">
+      <div className="catalog-intro">
+        <p className="section-kicker">Workbench</p>
+        <h1>Systems you can operate, inspect, and question.</h1>
+        <p>
+          A growing collection of Python agent systems built around explicit contracts,
+          bounded autonomy, verification, and observable execution.
+        </p>
+      </div>
 
-## Mitigation Executed
-- Increased database connection limit pool to 150 (temporarily resolved bottleneck).
-- Rolled back deployment to commit #a8c2f0f.
-`,
-  financial_wellness: `# COACHING ROADMAP: JOHN (34)
-**Monthly Income:** $7,083 (Pre-tax)
-**Savings Target:** $40,000 for home downpayment (in 3 years)
+      <div className="catalog-grid">
+        {TOOLS.map((tool) => (
+          <button
+            className={`catalog-item ${tool.availability}`}
+            key={tool.id}
+            onClick={() => onSelect(tool)}
+            type="button"
+          >
+            <div className="catalog-item-topline">
+              <span>{tool.number}</span>
+              <StatusPill status={tool.availability === 'ready' ? 'Available' : 'Planned'} />
+            </div>
+            <h2>{tool.title}</h2>
+            <p>{tool.description}</p>
+            <span className="catalog-action">
+              {tool.availability === 'ready' ? 'Open tool' : 'View scope'}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
 
-## Recommendation Path
-- **Emergency Fund:** Secure $10,000 (approx. 2 months expenses) first.
-- **Debt Payoff (Avalanche Strategy):** Allocate an extra $350/month to the $12k Student Loan (4.5% interest rate).
-- **Home Savings:** Save $950/month in a High Yield Savings Account (HYSA) returning ~4.5%.
+function PlannedTool({ tool }: { tool: ToolDefinition }) {
+  return (
+    <section className="planned-view">
+      <div className="planned-number">{tool.number}</div>
+      <StatusPill status="Planned" />
+      <h1>{tool.title}</h1>
+      <p>{tool.description}</p>
+      <div className="planned-note">
+        <strong>Not implemented yet</strong>
+        <span>
+          This workspace is reserved so each system can eventually expose its own
+          inputs, outputs, run state, and operational diagnostics.
+        </span>
+      </div>
+    </section>
+  )
+}
 
-*Action Required: Confirm authorization to link savings accounts for automated weekly tracking.*
-`,
-  knowledge_synthesis: `# KNOWLEDGE GRAPH TIMELINE SYNC
-**Detected Conflict:** API Dev & Integration mismatch.
-
-## Conflict Details
-- **Project Alpha API:** Deprecation of API Version 1 scheduled for **October 1**.
-- **Project Beta Client:** Scheduled update to API Version 2 set for **December 15**.
-- **Impact:** Client onboarding will break for 2.5 months for newly integrated partners.
-
-## Proposed Action
-- Postpone API Version 1 deprecation to December 30, OR expedite Project Beta's migration sprint to September 25.
-`,
-  vendor_negotiator: `# PROCUREMENT DRAFT CORRESPONDENCE
-**Target Vendor:** Datadog Inc.
-**Proposed Term:** 8% increase in subscription rates
-
-## Redlined Terms
-- **Section 4.1 (Fee Indexing):** Amend the maximum annual price increase cap from 8% to a maximum of 4.5% linked to volume commitments.
-
-## Drafted Email Response
-"Dear Datadog Team,
-We value our partnership and have audited our usage metrics. Based on volume benchmarks, we are willing to commit to a 3-year term with pricing capped at a 4.5% annual rate hike, aligning with our current corporate procurement limits..."
-`,
-  fraud_hunter: `=== FRAUD DETECTION SIGNATURE SANDBOX ===
-**Hypothesis:** Multi-device fast login with micro-transactions.
-
-**Evaluation Run Summary:**
-- **Datasets Analyzed:** 100,000 test logs.
-- **True Positives (Fraud Captured):** 14 accounts.
-- **False Positives (Clean Flagged):** 1 account.
-- **Precision Metric:** 93.3%
-- **Recall Metric:** 87.5%
-
-**Signature Pattern Rule:**
-\`\`\`sql
-SELECT user_id, count(device_id) FROM logins
-WHERE login_time > NOW() - INTERVAL '5 minutes'
-GROUP BY user_id HAVING count(device_id) >= 3;
-\`\`\`
-`,
-  productivity_agent: `# PERSONAL SPRINT SCHEDULE
-**Primary Goal:** Publish Python agent portfolio post by Friday.
-
-## Scheduled Deep-Work Blocks
-- **Wednesday:** 9:00 AM - 12:00 PM (Drafting code examples)
-- **Thursday:** 1:00 PM - 4:00 PM (Writing explanations)
-- **Friday:** 10:00 AM - 1:00 PM (Final editing & deployment)
-
-## Automated Calendar Actions
-- **Rescheduled:** "Team Coffee Chat" shifted to Monday, Aug 17.
-- **Auto-drafted email:** Send response to Mark apologizing for postponing the non-urgent sync.
-`
-};
-
-export default function App() {
-  const [selectedProject, setSelectedProject] = useState<Project>(PROJECTS[0]);
-  const [inputVal, setInputVal] = useState<string>(PROJECTS[0].defaultInput);
-  const [isLiveMode, setIsLiveMode] = useState<boolean>(false);
-  const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [terminalLines, setTerminalLines] = useState<string[]>([]);
-  const [outputResult, setOutputResult] = useState<string>('');
-  
-  const terminalEndRef = useRef<HTMLDivElement>(null);
-
-  // Sync inputs when selecting different projects
-  useEffect(() => {
-    setInputVal(selectedProject.defaultInput);
-    setTerminalLines([]);
-    setOutputResult('');
-  }, [selectedProject]);
-
-  // Scroll to bottom of terminal
-  useEffect(() => {
-    if (terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [terminalLines]);
-
-  const handleRunDemo = async () => {
-    setIsRunning(true);
-    setTerminalLines([]);
-    setOutputResult('');
-
-    if (isLiveMode) {
-      // Direct API Request to the specific Python backend port
-      const backendUrl = `http://localhost:${selectedProject.backendPort}/${selectedProject.apiPath}`;
-      try {
-        setTerminalLines([`[INFO] Direct API mode active: Connecting to ${backendUrl}...`]);
-        const response = await fetch(backendUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: inputVal })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        setTerminalLines(prev => [...prev, `[SUCCESS] Received clean response from Python API.`]);
-        setOutputResult(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
-      } catch (err: any) {
-        setTerminalLines(prev => [
-          ...prev,
-          `[ERROR] Connection failed: ${err.message}`,
-          `[INFO] Please ensure the Python backend server for this project is running on port ${selectedProject.backendPort}.`
-        ]);
-        setOutputResult('');
-      } finally {
-        setIsRunning(false);
-      }
-    } else {
-      // Mock simulation mode
-      const traceLines = MOCK_TRACES[selectedProject.id] || [];
-      const outputText = MOCK_OUTPUTS[selectedProject.id] || '';
-
-      // Stream lines into terminal for a realistic feel
-      let lineIndex = 0;
-      const interval = setInterval(() => {
-        if (lineIndex < traceLines.length) {
-          setTerminalLines(prev => [...prev, traceLines[lineIndex]]);
-          lineIndex++;
-        } else {
-          clearInterval(interval);
-          setOutputResult(outputText);
-          setIsRunning(false);
-        }
-      }, 500);
-    }
-  };
-
-  const getLineClass = (line: string) => {
-    if (line.includes('[ERROR]')) return 'line-error';
-    if (line.includes('[WARNING]')) return 'line-warning';
-    if (line.includes('[SUCCESS]')) return 'line-success';
-    if (line.includes('[STEP')) return 'line-step';
-    return 'line-info';
-  };
+function ResearchForm({
+  request,
+  loading,
+  onChange,
+  onSubmit,
+}: {
+  request: BriefingRequest
+  loading: boolean
+  onChange: (request: BriefingRequest) => void
+  onSubmit: () => void
+}) {
+  const setField = <Key extends keyof BriefingRequest>(
+    key: Key,
+    value: BriefingRequest[Key],
+  ) => onChange({ ...request, [key]: value })
 
   return (
-    <div className="app-container">
-      {/* Sidebar navigation */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <h1>Agentic AI Systems</h1>
-          <p>Portfolio of Python Demos</p>
-        </div>
-        <nav className="sidebar-menu">
-          {PROJECTS.map((project) => (
-            <button
-              key={project.id}
-              onClick={() => setSelectedProject(project)}
-              className={`menu-item ${selectedProject.id === project.id ? 'active' : ''}`}
-            >
-              <span className="item-number">{project.number}</span>
-              <div className="item-details">
-                <span className="item-title">{project.title}</span>
-                <span className="item-category">{project.category}</span>
-              </div>
-              <span className={`status-dot not-started`} title="Not Started" />
-            </button>
-          ))}
-        </nav>
-      </aside>
+    <form
+      className="research-form"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSubmit()
+      }}
+    >
+      <div className="form-row form-row-primary">
+        <label>
+          <span>Symbol</span>
+          <input
+            maxLength={10}
+            value={request.symbol}
+            onChange={(event) => setField('symbol', event.target.value.toUpperCase())}
+          />
+        </label>
+        <label>
+          <span>As of</span>
+          <input
+            type="datetime-local"
+            value={request.as_of}
+            onChange={(event) => setField('as_of', event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Audience</span>
+          <select
+            value={request.audience}
+            onChange={(event) => setField('audience', event.target.value)}
+          >
+            <option value="investors">Investors</option>
+            <option value="executives">Executives</option>
+            <option value="analysts">Analysts</option>
+          </select>
+        </label>
+        <label>
+          <span>Horizon</span>
+          <select
+            value={request.time_horizon}
+            onChange={(event) => setField('time_horizon', event.target.value)}
+          >
+            <option value="7d">7 days</option>
+            <option value="3m">3 months</option>
+            <option value="12m">12 months</option>
+            <option value="3y">3 years</option>
+          </select>
+        </label>
+      </div>
+      <label className="question-field">
+        <span>Research question</span>
+        <textarea
+          rows={4}
+          value={request.research_question}
+          onChange={(event) => setField('research_question', event.target.value)}
+        />
+        <small>Be specific about the decision, risk, or time horizon you care about.</small>
+      </label>
+      <button
+        className="primary-button"
+        disabled={loading || request.research_question.trim().length < 30}
+        type="submit"
+      >
+        {loading ? 'Researching…' : 'Run research'}
+      </button>
+    </form>
+  )
+}
 
-      {/* Main content display */}
-      <main className="main-content">
-        <header className="project-header">
-          <div className="project-title-area">
-            <h2>{selectedProject.title}</h2>
-            <div className="project-meta">
-              <span className="category-tag">{selectedProject.category}</span>
-              <span className="separator">|</span>
-              <span className="port-tag">Backend Port: {selectedProject.backendPort}</span>
+function LoadingBriefing() {
+  return (
+    <div className="briefing-loading" aria-live="polite">
+      <div className="loading-heading">
+        <span className="loading-pulse" />
+        The workflow is researching, retrieving, and validating evidence.
+      </div>
+      <div className="skeleton skeleton-wide" />
+      <div className="skeleton" />
+      <div className="skeleton skeleton-short" />
+      <div className="skeleton-card" />
+      <div className="skeleton-card" />
+    </div>
+  )
+}
+
+function EvidenceDisclosure({ evidence }: { evidence: EvidenceItem }) {
+  return (
+    <details className="evidence-item">
+      <summary>
+        <span>
+          <strong>{evidence.title || evidence.source}</strong>
+          <small>
+            {evidence.evidence_type} · {evidence.reference_id}
+          </small>
+        </span>
+        <span className="disclosure-label">Evidence</span>
+      </summary>
+      <blockquote>{String(evidence.content)}</blockquote>
+      <div className="evidence-meta">
+        {evidence.published_at && <span>Published {formatDate(evidence.published_at)}</span>}
+        {evidence.chunk_id && <code>chunk {evidence.chunk_id}</code>}
+        {evidence.field_path && <code>{evidence.field_path}</code>}
+        {evidence.url && (
+          <a href={evidence.url} rel="noreferrer" target="_blank">
+            Open source
+          </a>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function confidenceLabel(confidence: number): string {
+  if (confidence >= 3) return 'High confidence'
+  if (confidence >= 2) return 'Moderate confidence'
+  return 'Low confidence'
+}
+
+function FindingCard({
+  finding,
+  index,
+  isSupported,
+}: {
+  finding: Finding
+  index: number
+  isSupported: boolean
+}) {
+  return (
+    <article className={`finding-card ${isSupported ? '' : 'finding-unsupported'}`}>
+      <div className="finding-index">{String(index + 1).padStart(2, '0')}</div>
+      <div className="finding-content">
+        <div className="finding-tags">
+          <span>{finding.claim_type}</span>
+          <span>{confidenceLabel(finding.confidence)}</span>
+          <span>{finding.evidence.length} sources</span>
+          {!isSupported && <span className="finding-warning">Needs review</span>}
+        </div>
+        <h3>{finding.statement}</h3>
+        <div className="evidence-list">
+          {finding.evidence.map((evidence, evidenceIndex) => (
+            <EvidenceDisclosure
+              evidence={evidence}
+              key={`${evidence.reference_id}-${evidence.chunk_id ?? evidence.field_path ?? evidenceIndex}`}
+            />
+          ))}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function BriefingView({
+  result,
+  symbol,
+  asOf,
+  timeHorizon,
+}: {
+  result: ResearchWorkflowResult
+  symbol: string
+  asOf: string
+  timeHorizon: string
+}) {
+  if (!result.briefing) {
+    return (
+      <div className="empty-state">
+        <strong>Run accepted</strong>
+        <p>The workflow is currently {result.status}. Run ID: {result.run_id}</p>
+      </div>
+    )
+  }
+
+  const approvalReady = result.verification?.approval_ready ?? false
+  const unsupportedFindings = new Set(
+    result.verification?.unsupported_finding_indexes ?? [],
+  )
+  const evidenceCount = result.briefing.key_findings.reduce(
+    (total, finding) => total + finding.evidence.length,
+    0,
+  )
+
+  return (
+    <div className="briefing-view">
+      <article className="research-note">
+        <header className="note-masthead">
+          <div className="note-title">
+            <span>Company research</span>
+            <h2>{symbol.toUpperCase()}</h2>
+          </div>
+          <dl className="note-metadata">
+            <div>
+              <dt>As of</dt>
+              <dd>{formatDate(asOf)}</dd>
             </div>
-          </div>
-          <div className={`status-badge not-started`}>
-            Not Started
-          </div>
+            <div>
+              <dt>Horizon</dt>
+              <dd>{timeHorizon}</dd>
+            </div>
+            <div>
+              <dt>Evidence</dt>
+              <dd>{evidenceCount} references</dd>
+            </div>
+            <div>
+              <dt>Review status</dt>
+              <dd className={approvalReady ? 'verified' : 'review-required'}>
+                <span aria-hidden="true" />
+                {approvalReady ? 'Verified' : 'Review required'}
+              </dd>
+            </div>
+          </dl>
         </header>
 
-        <section className="project-body">
-          {/* Problem and Desired Outcome Cards */}
-          <div className="info-cards">
-            <div className="card">
-              <h3>The Problem</h3>
-              <p>{selectedProject.problem}</p>
+        <section className="briefing-summary">
+          <h2>Investment summary</h2>
+          <p>{result.briefing.executive_summary}</p>
+        </section>
+
+        <section className="findings-section">
+          <div className="section-heading-row">
+            <div>
+              <h2>Key findings</h2>
+              <p>Ranked claims and the evidence used to support them.</p>
             </div>
-            <div className="card">
-              <h3>Desired Outcome</h3>
-              <p>{selectedProject.outcome}</p>
-            </div>
+            <span>{result.briefing.key_findings.length}</span>
           </div>
-
-          {/* Interactive Playground Control Card */}
-          <div className="playground-section">
-            <h3 className="section-title">Interactive Playground</h3>
-            
-            <div className="controls-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h4>Demo Run Config</h4>
-                <div className="mode-toggle">
-                  <button 
-                    className={`mode-btn ${!isLiveMode ? 'active' : ''}`}
-                    onClick={() => setIsLiveMode(false)}
-                  >
-                    Simulated Mode
-                  </button>
-                  <button 
-                    className={`mode-btn ${isLiveMode ? 'active' : ''}`}
-                    onClick={() => setIsLiveMode(true)}
-                  >
-                    Live Python Backend
-                  </button>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="user-input">{selectedProject.inputLabel}</label>
-                <textarea
-                  id="user-input"
-                  rows={3}
-                  value={inputVal}
-                  onChange={(e) => setInputVal(e.target.value)}
-                  placeholder={selectedProject.inputPlaceholder}
-                  disabled={isRunning}
-                />
-              </div>
-
-              <div className="button-row">
-                <button
-                  className="btn btn-primary"
-                  onClick={handleRunDemo}
-                  disabled={isRunning || !inputVal.trim()}
-                >
-                  {isRunning ? 'Running Agent...' : 'Execute Agent System'}
-                </button>
-              </div>
-            </div>
-
-            {/* Terminal Feed Display */}
-            <div className="terminal-card">
-              <div className="terminal-header">
-                <div className="terminal-dots">
-                  <span className="dot red" />
-                  <span className="dot yellow" />
-                  <span className="dot green" />
-                </div>
-                <span className="terminal-title">agent_trace_output.log</span>
-                <span />
-              </div>
-              <div className="terminal-body">
-                {terminalLines.length === 0 && (
-                  <span style={{ color: 'var(--text-secondary)' }}>
-                    Terminal ready. Click "Execute Agent System" to run the workflow.
-                  </span>
-                )}
-                {terminalLines.map((line, idx) => (
-                  <div key={idx} className={`terminal-line ${getLineClass(line)}`}>
-                    {line}
-                  </div>
-                ))}
-                {isRunning && (
-                  <div className="terminal-line line-info" style={{ animation: 'pulse 1.5s infinite' }}>
-                    ▊ Running next agentic cycle...
-                  </div>
-                )}
-                <div ref={terminalEndRef} />
-              </div>
-            </div>
-
-            {/* Agent Results Display */}
-            {outputResult && (
-              <div className="output-panel">
-                <h4 className="output-title">Synthesized Agent Outputs</h4>
-                <pre className="output-content">{outputResult}</pre>
-              </div>
-            )}
+          <div className="findings-list">
+            {result.briefing.key_findings.map((finding, index) => (
+              <FindingCard
+                finding={finding}
+                index={index}
+                isSupported={!unsupportedFindings.has(index)}
+                key={`${index}-${finding.statement}`}
+              />
+            ))}
           </div>
         </section>
-      </main>
+
+        <section className="outlook-section">
+          <h2>Outlook</h2>
+          <p>{result.briefing.outlook}</p>
+        </section>
+
+        {result.briefing.limitations.length > 0 && (
+          <section className="limitations-section">
+            <h2>Research limitations</h2>
+            <ul>
+              {result.briefing.limitations.map((limitation) => (
+                <li key={limitation}>{limitation}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <footer className="note-footer">
+          <span>Generated research · Evidence should be reviewed before investment decisions</span>
+          <code>{result.run_id}</code>
+        </footer>
+      </article>
     </div>
-  );
+  )
+}
+
+function BackfillPanel() {
+  const [request, setRequest] = useState<BackfillRequest>(DEFAULT_BACKFILL_REQUEST)
+  const [result, setResult] = useState<BackfillResult | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const submit = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setResult(await backfillCompany(request))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Backfill failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <section className="admin-panel backfill-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>Corpus backfill</h2>
+          <p>Populate filings and topic-bucket news before running research.</p>
+        </div>
+        {result && <StatusPill status={result.status} />}
+      </div>
+      <div className="compact-form-grid">
+        <label>
+          <span>Symbol</span>
+          <input
+            value={request.symbol}
+            onChange={(event) => setRequest({ ...request, symbol: event.target.value.toUpperCase() })}
+          />
+        </label>
+        <label>
+          <span>Company name</span>
+          <input
+            value={request.company_name}
+            onChange={(event) => setRequest({ ...request, company_name: event.target.value })}
+          />
+        </label>
+        <label>
+          <span>From date</span>
+          <input
+            type="date"
+            value={request.from_date}
+            onChange={(event) => setRequest({ ...request, from_date: event.target.value })}
+          />
+        </label>
+        <label>
+          <span>As of</span>
+          <input
+            type="date"
+            value={request.as_of}
+            onChange={(event) => setRequest({ ...request, as_of: event.target.value })}
+          />
+        </label>
+      </div>
+      <div className="checkbox-row">
+        {[
+          ['include_filings', 'Filings'],
+          ['include_news', 'News'],
+          ['include_8k', '8-K filings'],
+        ].map(([key, label]) => (
+          <label key={key}>
+            <input
+              checked={request[key as keyof Pick<BackfillRequest, 'include_filings' | 'include_news' | 'include_8k'>]}
+              onChange={(event) => setRequest({ ...request, [key]: event.target.checked })}
+              type="checkbox"
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      {error && <div className="inline-error">{error}</div>}
+      <button className="secondary-button" disabled={loading} onClick={submit} type="button">
+        {loading ? 'Backfilling…' : 'Run backfill'}
+      </button>
+      {result && (
+        <div className="backfill-result">
+          <strong>{result.total_documents_processed} documents processed</strong>
+          <span>{result.failures} source failures</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function AdminView({
+  workflow,
+  run,
+}: {
+  workflow: ResearchWorkflowResult | null
+  run: ResearchRunDetail | null
+}) {
+  const verification = run?.verification_payload ?? workflow?.verification ?? null
+  const rawPayload = run ?? workflow
+
+  return (
+    <div className="admin-view">
+      <BackfillPanel />
+
+      <section className="admin-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Run diagnostics</h2>
+            <p>Persistence, verification, checkpoint, and telemetry state.</p>
+          </div>
+          {run && <StatusPill status={run.status} />}
+        </div>
+        {!run ? (
+          <div className="admin-empty">Run a research request to populate diagnostics.</div>
+        ) : (
+          <>
+            <div className="diagnostic-grid">
+              <div>
+                <span>Run ID</span>
+                <code>{run.run_id}</code>
+              </div>
+              <div>
+                <span>Checkpoint</span>
+                <strong>{run.checkpoint_stage ?? 'None'}</strong>
+              </div>
+              <div>
+                <span>Model</span>
+                <strong>{run.model_name}</strong>
+              </div>
+              <div>
+                <span>Completed</span>
+                <strong>{formatDate(run.completed_at)}</strong>
+              </div>
+            </div>
+            {run.trace_id && (
+              <a className="trace-link" href={buildLogfireUrl(run.trace_id)} rel="noreferrer" target="_blank">
+                Open complete Logfire trace
+              </a>
+            )}
+          </>
+        )}
+      </section>
+
+      <section className="admin-panel verification-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Verification</h2>
+            <p>What survived deterministic evidence checks and semantic grounding.</p>
+          </div>
+          {verification && (
+            <StatusPill status={verification.approval_ready ? 'Approval ready' : 'Review required'} />
+          )}
+        </div>
+        {!verification ? (
+          <div className="admin-empty">No verification output yet.</div>
+        ) : (
+          <div className="verification-grid">
+            <div>
+              <strong>{verification.unsupported_finding_indexes.length}</strong>
+              <span>Unsupported findings</span>
+              <code>{verification.unsupported_finding_indexes.join(', ') || 'None'}</code>
+            </div>
+            <div>
+              <strong>{verification.invalid_evidence_references.length}</strong>
+              <span>Invalid references</span>
+              <div className="reference-list">
+                {verification.invalid_evidence_references.slice(0, 8).map((reference, index) => (
+                  <code key={`${reference}-${index}`}>{reference}</code>
+                ))}
+              </div>
+            </div>
+            <div>
+              <strong>{verification.grounding_failures.length}</strong>
+              <span>Grounding failures</span>
+              <div className="reference-list">
+                {verification.grounding_failures.map((failure) => (
+                  <p key={`${failure.finding_index}-${failure.reason}`}>
+                    Finding {failure.finding_index + 1}: {failure.reason}
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="admin-panel raw-panel">
+        <details>
+          <summary>Raw structured payload</summary>
+          <pre>{rawPayload ? JSON.stringify(rawPayload, null, 2) : 'No run data.'}</pre>
+        </details>
+      </section>
+    </div>
+  )
+}
+
+function RunHistory({
+  runs,
+  selectedRunId,
+  loading,
+  onSelect,
+  onNew,
+}: {
+  runs: ResearchRunSummary[]
+  selectedRunId: string | null
+  loading: boolean
+  onSelect: (runId: string) => void
+  onNew: () => void
+}) {
+  return (
+    <aside className="run-history">
+      <div className="run-history-heading">
+        <div>
+          <h2>Recent research</h2>
+          <span>{runs.length} saved runs</span>
+        </div>
+        <button onClick={onNew} type="button">New</button>
+      </div>
+      {loading && runs.length === 0 ? (
+        <div className="history-message">Loading saved research…</div>
+      ) : runs.length === 0 ? (
+        <div className="history-message">Completed and failed runs will appear here.</div>
+      ) : (
+        <div className="run-history-list">
+          {runs.map((run) => (
+            <button
+              className={`run-history-item ${selectedRunId === run.run_id ? 'active' : ''}`}
+              key={run.run_id}
+              onClick={() => onSelect(run.run_id)}
+              type="button"
+            >
+              <span className="history-item-topline">
+                <strong>{run.symbol}</strong>
+                <StatusPill status={run.status} />
+              </span>
+              <span className="history-question">{run.research_question}</span>
+              <span className="history-date">{formatDate(run.created_at)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function ResearchWorkspace() {
+  const [mode, setMode] = useState<WorkspaceMode>('user')
+  const [request, setRequest] = useState<BriefingRequest>(DEFAULT_RESEARCH_REQUEST)
+  const [workflow, setWorkflow] = useState<ResearchWorkflowResult | null>(null)
+  const [runDetail, setRunDetail] = useState<ResearchRunDetail | null>(null)
+  const [runHistory, setRunHistory] = useState<ResearchRunSummary[]>([])
+  const [loading, setLoading] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const updateRunUrl = (runId: string | null) => {
+    const url = new URL(window.location.href)
+    if (runId) url.searchParams.set('run', runId)
+    else url.searchParams.delete('run')
+    window.history.pushState({}, '', url)
+  }
+
+  const showSavedRun = async (runId: string) => {
+    setHistoryLoading(true)
+    setError(null)
+    try {
+      const savedRun = await getResearchRun(runId)
+      setRunDetail(savedRun)
+      setWorkflow({
+        run_id: savedRun.run_id,
+        status: savedRun.status,
+        briefing: savedRun.briefing_payload,
+        verification: savedRun.verification_payload,
+      })
+      setRequest({
+        ...savedRun.request_payload,
+        as_of: localDateTimeFromIso(savedRun.request_payload.as_of),
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not load this run')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const refreshHistory = async () => {
+    try {
+      setRunHistory(await getResearchRuns())
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not load run history')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshHistory()
+    const initialRunId = new URLSearchParams(window.location.search).get('run')
+    if (initialRunId) void showSavedRun(initialRunId)
+
+    const handleNavigation = () => {
+      const runId = new URLSearchParams(window.location.search).get('run')
+      if (runId) void showSavedRun(runId)
+      else {
+        setWorkflow(null)
+        setRunDetail(null)
+      }
+    }
+    window.addEventListener('popstate', handleNavigation)
+    return () => window.removeEventListener('popstate', handleNavigation)
+  }, [])
+
+  const run = async () => {
+    setLoading(true)
+    setError(null)
+    setWorkflow(null)
+    setRunDetail(null)
+    try {
+      const normalizedRequest: BriefingRequest = {
+        ...request,
+        symbol: request.symbol.trim().toUpperCase(),
+        as_of: new Date(request.as_of).toISOString(),
+      }
+      const nextWorkflow = await runResearch(normalizedRequest)
+      setWorkflow(nextWorkflow)
+      setRunDetail(await getResearchRun(nextWorkflow.run_id))
+      updateRunUrl(nextWorkflow.run_id)
+      await refreshHistory()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Research workflow failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const runStatus = runDetail?.status ?? workflow?.status
+  const headingMeta = useMemo(
+    () => (runStatus ? `${request.symbol.toUpperCase()} · ${runStatus}` : 'Ready for a new run'),
+    [request.symbol, runStatus],
+  )
+
+  const selectSavedRun = (runId: string) => {
+    updateRunUrl(runId)
+    void showSavedRun(runId)
+  }
+
+  const startNewResearch = () => {
+    updateRunUrl(null)
+    setWorkflow(null)
+    setRunDetail(null)
+    setError(null)
+  }
+
+  return (
+    <section className="workspace-view">
+      <div className="workspace-heading">
+        <div>
+          <div className="workspace-title-row">
+            <span className="tool-number-large">02</span>
+            <div>
+              <h1>Research Briefing</h1>
+              <p>{headingMeta}</p>
+            </div>
+          </div>
+        </div>
+        <div className="mode-switch" aria-label="Research workspace mode">
+          <button className={mode === 'user' ? 'active' : ''} onClick={() => setMode('user')} type="button">
+            Briefing
+          </button>
+          <button className={mode === 'admin' ? 'active' : ''} onClick={() => setMode('admin')} type="button">
+            Admin
+          </button>
+        </div>
+      </div>
+
+      <div className="research-workspace-grid">
+        <div className="research-main-column">
+          <ResearchForm request={request} loading={loading} onChange={setRequest} onSubmit={run} />
+
+          {error && (
+            <div className="workflow-error">
+              <strong>Research failed</strong>
+              <span>{error}</span>
+            </div>
+          )}
+
+          {loading && <LoadingBriefing />}
+          {!loading && mode === 'user' && workflow && (
+            <BriefingView
+              result={workflow}
+              symbol={runDetail?.symbol ?? request.symbol}
+              asOf={runDetail?.as_of ?? request.as_of}
+              timeHorizon={request.time_horizon}
+            />
+          )}
+          {!loading && mode === 'user' && !workflow && !error && (
+            <div className="empty-state briefing-empty">
+              <span className="empty-index">02</span>
+              <strong>Ask a decision-useful question.</strong>
+              <p>The agent will retrieve evidence, produce a structured briefing, and verify every finding before returning it.</p>
+            </div>
+          )}
+          {!loading && mode === 'admin' && <AdminView workflow={workflow} run={runDetail} />}
+        </div>
+        <RunHistory
+          runs={runHistory}
+          selectedRunId={runDetail?.run_id ?? null}
+          loading={historyLoading}
+          onSelect={selectSavedRun}
+          onNew={startNewResearch}
+        />
+      </div>
+    </section>
+  )
+}
+
+export default function App() {
+  const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(toolFromLocation)
+
+  useEffect(() => {
+    const handleNavigation = () => setSelectedTool(toolFromLocation())
+    window.addEventListener('popstate', handleNavigation)
+    return () => window.removeEventListener('popstate', handleNavigation)
+  }, [])
+
+  const navigateToTool = (tool: ToolDefinition | null) => {
+    const url = new URL(window.location.href)
+    if (tool) url.searchParams.set('tool', tool.id)
+    else url.searchParams.delete('tool')
+    if (!tool || tool.id !== 'research') url.searchParams.delete('run')
+    window.history.pushState({}, '', url)
+    setSelectedTool(tool)
+  }
+
+  return (
+    <div className="app-shell">
+      <AppHeader onHome={() => navigateToTool(null)} />
+      <div className="app-frame">
+        <ToolRail selectedId={selectedTool?.id ?? null} onSelect={navigateToTool} />
+        <main className="workspace-canvas">
+          {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
+          {selectedTool?.id === 'research' && <ResearchWorkspace />}
+          {selectedTool && selectedTool.id !== 'research' && <PlannedTool tool={selectedTool} />}
+        </main>
+      </div>
+    </div>
+  )
 }

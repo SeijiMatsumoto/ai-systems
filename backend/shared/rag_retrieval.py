@@ -15,8 +15,16 @@ def retrieve_document_by_distance(
     symbol: str,
     document_type: schemas.DocumentType,
     top_n: int = 3,
+    published_before: datetime | None = None,
     published_after: datetime | None = None,
 ):
+    if (
+        published_after is not None
+        and published_before is not None
+        and published_after > published_before
+    ):
+        raise ValueError("published_after must be on or before published_before")
+
     response = client.embeddings.create(input=query, model="text-embedding-3-small")
     query_embedding = response.data[0].embedding
 
@@ -40,6 +48,8 @@ def retrieve_document_by_distance(
     )
     if published_after is not None:
         statement = statement.where(schemas.Document.published_at >= published_after)
+    if published_before is not None:
+        statement = statement.where(schemas.Document.published_at <= published_before)
 
     with db_utils.get_session() as session:
         rows = session.execute(statement).all()

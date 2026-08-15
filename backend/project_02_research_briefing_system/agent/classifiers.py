@@ -1,8 +1,9 @@
 from typing import TypeVar
+from uuid import UUID
 
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
@@ -21,22 +22,25 @@ class GroundingClassification(BaseModel):
 
 
 def create_classifier(
+    name: str,
     output_type: type[OutputT],
     instructions: str,
     reasoning_effort: ReasoningEffort = "low",
 ) -> Agent[None, OutputT]:
     return Agent(
+        name=name,
         model=MODEL_NAME,
         output_type=output_type,
         instructions=instructions,
         model_settings=OpenAIResponsesModelSettings(
-            openai_reasoning_effort=reasoning_effort,
+            openai_reasoning_effort=reasoning_effort, timeout=30.0
         ),
         retries=1,
     )
 
 
 query_classifier = create_classifier(
+    name="research_breifing_query_classifier",
     output_type=QueryClassification,
     instructions="""
 Classify whether a research question is safe and relevant to the specified company.
@@ -56,7 +60,9 @@ Set reasoning to one short sentence explaining the decision. Do not exceed 12 wo
 )
 
 
-async def run_query_classifier(symbol: str, query: str) -> QueryClassification:
+async def run_query_classifier(
+    symbol: str, query: str, run_id: UUID
+) -> QueryClassification:
     result = await query_classifier.run(
         f"""
 Symbol: {symbol}
@@ -65,12 +71,19 @@ Research question:
 <research_question>
 {query}
 </research_question>
-"""
+""",
+        usage_limits=UsageLimits(request_limit=2),
+        metadata={
+            "run_id": str(run_id),
+            "symbol": symbol,
+            "component": "research_breifing_query_classifier",
+        },
     )
     return result.output
 
 
 grounding_classifier = create_classifier(
+    name="research_breifing_grounding_classifier",
     output_type=GroundingClassification,
     instructions="""
 Determine whether verified evidence supports a research finding.
@@ -95,7 +108,7 @@ Set reasoning to one brief phrase explaining the decision.
 )
 
 
-async def verify_finding(finding, valid_evidence):
+async def verify_finding(finding, valid_evidence, run_id: UUID, finding_index: int):
     result = await grounding_classifier.run(
         f"""
 Finding statement:
@@ -109,7 +122,13 @@ Verified evidence:
 <verified_evidence>
 {valid_evidence}
 </verified_evidence>
-"""
+""",
+        usage_limits=UsageLimits(request_limit=2),
+        metadata={
+            "run_id": str(run_id),
+            "finding_index": finding_index,
+            "component": "research_breifing_grounding_classifier",
+        },
     )
 
     return result.output

@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 import redis
@@ -37,7 +37,7 @@ def fetch_filings(
     if start_date or end_date:
         filing_date = (
             (start_date or date(1900, 1, 1)).isoformat(),
-            (end_date or date.today()).isoformat(),
+            (end_date or date.today()).isoformat(),  # noqa: DTZ011
         )
 
     cache_key = ":".join(
@@ -48,7 +48,7 @@ def fetch_filings(
             start_date.isoformat() if start_date else "any-start",
             end_date.isoformat() if end_date else "any-end",
             str(limit),
-            datetime.today().strftime("%Y-%m-%d"),
+            datetime.today().strftime("%Y-%m-%d"),  # noqa: DTZ002
         ]
     )
     cached_data = r.get(cache_key)
@@ -80,6 +80,7 @@ def fetch_filings(
             if not isinstance(candidate, EntityFiling):
                 raise TypeError("EDGAR latest filings contained an unexpected item")
             filings.append(candidate)
+
     normalized = [
         {
             "reference_id": filing.accession_no,
@@ -90,7 +91,11 @@ def fetch_filings(
             ),
             "source_url": filing.url,
             "author": matching_filings.company_name,
-            "published_at": filing.filing_date,
+            "published_at": datetime.combine(
+                date.fromisoformat(filing.filing_date),
+                time.min,
+                tzinfo=timezone.utc,
+            ).isoformat(),
             "content": filing.text(),
         }
         for filing in filings

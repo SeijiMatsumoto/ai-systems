@@ -2,7 +2,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from backend.db import db_utils, schemas
 
@@ -17,6 +17,7 @@ def retrieve_document_by_distance(
     top_n: int = 3,
     published_before: datetime | None = None,
     published_after: datetime | None = None,
+    neighbor_radius: int = 0,
 ):
     if (
         published_after is not None
@@ -52,14 +53,59 @@ def retrieve_document_by_distance(
         statement = statement.where(schemas.Document.published_at <= published_before)
 
     with db_utils.get_session() as session:
-        rows = session.execute(statement).all()
+        seed_rows = session.execute(statement).all()
+        rows_by_chunk = {
+            chunk.id: (chunk, document, float(distance_value))
+            for chunk, document, distance_value in seed_rows
+        }
+
+        if neighbor_radius > 0 and seed_rows:
+            neighbor_conditions = [
+                and_(
+                    schemas.DocumentChunk.document_id == document.id,
+                    schemas.DocumentChunk.chunk_index.between(
+                        max(0, chunk.chunk_index - neighbor_radius),
+                        chunk.chunk_index + neighbor_radius,
+                    ),
+                )
+                for chunk, document, _ in seed_rows
+            ]
+            neighbor_statement = (
+                select(schemas.DocumentChunk, schemas.Document)
+                .join(
+                    schemas.Document,
+                    schemas.DocumentChunk.document_id == schemas.Document.id,
+                )
+                .where(or_(*neighbor_conditions))
+            )
+            for chunk, document in session.execute(neighbor_statement).all():
+                if chunk.id in rows_by_chunk:
+                    continue
+                nearest_seed_distance = min(
+                    float(distance_value)
+                    for seed_chunk, seed_document, distance_value in seed_rows
+                    if seed_document.id == document.id
+                    and abs(seed_chunk.chunk_index - chunk.chunk_index)
+                    <= neighbor_radius
+                )
+                rows_by_chunk[chunk.id] = (
+                    chunk,
+                    document,
+                    nearest_seed_distance,
+                )
+
+        rows = sorted(rows_by_chunk.values(), key=lambda row: row[2])
 
         return [
             {
                 "chunk_id": str(chunk.id),
                 "reference_id": str(document.reference_id),
-                "chunk_index": str(chunk.chunk_index),
+                "chunk_index": chunk.chunk_index,
                 "document_id": str(document.id),
+                "document_type": document.document_type.value,
+                "content_quality": (document.filter_metadata or {}).get(
+                    "content_quality"
+                ),
                 "content": chunk.content,
                 "similarity": 1 - distance_value,
                 "title": document.title,

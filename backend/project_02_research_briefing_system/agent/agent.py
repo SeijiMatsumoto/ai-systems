@@ -1,6 +1,7 @@
 import asyncio
 import json
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -17,9 +18,15 @@ from pydantic_ai import (
 )
 
 from backend.db import schemas
+from backend.project_02_research_briefing_system.agent.evidence import (
+    build_document_evidence_candidates,
+    build_financial_evidence_candidates,
+    compact_document_evidence,
+)
 from backend.project_02_research_briefing_system.agent.models import (
     BriefingRequest,
-    ResearchBriefing,
+    DraftResearchBriefing,
+    EvidenceRecord,
 )
 from backend.project_02_research_briefing_system.data.market_data import (
     get_historical_financials,
@@ -33,12 +40,39 @@ load_dotenv("backend/.env")
 class MyDeps:
     symbol: str
     as_of: datetime
+    evidence_catalog: dict[str, EvidenceRecord]
+    financial_sources: dict[str, object]
+    _catalog_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        repr=False,
+    )
+
+    def register_evidence(self, records: list[EvidenceRecord]) -> None:
+        with self._catalog_lock:
+            self.evidence_catalog.update(
+                {record.evidence_id: record for record in records}
+            )
+
+    def register_financial_source(
+        self,
+        reference_id: str,
+        source: object,
+    ) -> None:
+        with self._catalog_lock:
+            self.financial_sources[reference_id] = source
+
+
+@dataclass
+class ResearchAgentExecution:
+    result: AgentRunResult[DraftResearchBriefing]
+    evidence_catalog: dict[str, EvidenceRecord]
+    financial_sources: dict[str, object]
 
 
 class SearchDocumentsInput(BaseModel):
     query: str
     document_type: schemas.DocumentType
-    top_n: int = Field(default=3, ge=1, le=10)
+    top_n: int = Field(default=3, ge=1, le=3)
     published_after: datetime | None = None
 
 
@@ -50,20 +84,62 @@ class FetchFinancialsInput(BaseModel):
     ] = "income"
     frequency: Literal["yearly", "quarterly"] = "yearly"
     periods: int = Field(default=4, ge=1, le=8)
+    metrics: list[str] | None = Field(
+        default=None,
+        max_length=12,
+        description=(
+            "Optional exact Yahoo Finance metric names. Omit to use a curated set "
+            "for the selected statement."
+        ),
+    )
+
+
+CURATED_FINANCIAL_METRICS: dict[str, tuple[str, ...]] = {
+    "income": (
+        "TotalRevenue",
+        "GrossProfit",
+        "OperatingIncome",
+        "NetIncome",
+        "DilutedEPS",
+        "EBITDA",
+        "PretaxIncome",
+        "TaxProvision",
+    ),
+    "balance_sheet": (
+        "TotalAssets",
+        "CurrentAssets",
+        "CashCashEquivalentsAndShortTermInvestments",
+        "TotalLiabilitiesNetMinorityInterest",
+        "CurrentLiabilities",
+        "StockholdersEquity",
+        "TotalDebt",
+        "WorkingCapital",
+    ),
+    "cash_flow": (
+        "OperatingCashFlow",
+        "FreeCashFlow",
+        "CapitalExpenditure",
+        "RepurchaseOfCapitalStock",
+        "CashDividendsPaid",
+        "InvestingCashFlow",
+        "FinancingCashFlow",
+        "EndCashPosition",
+    ),
+}
 
 
 logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic_ai()
 
 model_name = "openai:gpt-5.6-terra"
-prompt_version = 1.0
-tool_version = 1.0
-schema_version = 1.0
+prompt_version = "6"
+tool_version = "4"
+schema_version = "3"
 
 agent = Agent(
     model=model_name,
     name="research_briefing_agent",
-    output_type=ResearchBriefing,
+    output_type=DraftResearchBriefing,
     model_settings=ModelSettings(timeout=60.0, max_tokens=8_000),
     tool_timeout=30,
     deps_type=MyDeps,
@@ -86,16 +162,42 @@ Do not invent facts, financial values, sources, quotations, or citations. If evi
 is stale, incomplete, or conflicting, state that clearly instead of resolving the
 uncertainty without support.
 
-Every key finding must include one or more supporting evidence items. Each evidence
-item must contain the source URL, title, publication date when available, an exact
-supporting quote or financial value, and the chunk or reference identifier when
-available. The executive summary must only summarize supported key findings rather
-than introduce new factual claims.
+The prefetched context and tools provide authoritative evidence candidates with stable
+evidence_id values. Every key finding must cite one or more of those IDs in
+evidence_ids. Copy IDs exactly. Do not write quotations, financial values, URLs, or
+source metadata into the output; Python resolves selected IDs into the authoritative
+evidence records after the run. Never construct an ID yourself. Keep each finding to
+one atomic claim so its selected evidence can be evaluated without guessing which
+part of a compound statement it supports. Every finding must also add materially
+distinct information. Before returning, compare the findings pairwise and omit any
+finding whose claim is already stated by, or is a narrower subset of, another
+finding. Two findings may concern the same broad topic only when each contributes a
+separate decision-useful claim. The executive summary must only summarize supported
+key findings.
 
-For prefetched financial evidence, use reference_id company_snapshot:<SYMBOL> or
-close_data:<SYMBOL>, with field_path relative to that referenced object. For historical
-financial evidence, copy the reference_id returned by the historical_financials tool
-and use a field_path into the complete tool result, beginning with data.
+Apply the same support rules used by the verifier:
+- A fact's evidence must directly support every material word and qualifier.
+- A calculation must cite all inputs and be arithmetically correct.
+- An inference must follow without material unstated assumptions.
+- A scenario must cite its assumptions and remain explicitly conditional.
+Do not add labels such as material, primary, key, immediate, or amplified unless the
+selected evidence supports them. A valuation multiple does not by itself support a
+claim about the magnitude or direction of a future share-price reaction. When
+evidence supports only a premise, state that premise rather than a broader conclusion.
+
+Filings and articles are both document evidence. Distinguish them using the
+document_type supplied with each candidate. Article candidates may have
+content_quality=snippet; treat those as useful recent-event signals but do not use a
+snippet as the sole basis for a high-confidence claim.
+
+When the question or time horizon depends on current developments, perform at least
+one targeted search with document_type=article before finishing. Use filings for
+primary-source facts and articles for recent developments or external context. Do
+not substitute an old filing for checking whether a relevant recent event occurred.
+
+The historical_financials tool returns a curated metric set by default. Use that
+default first. Supply at most 12 exact metric names only when the question requires
+specific fields that the curated response omitted.
 
 Clearly distinguish reported facts and financial values from your own analysis and
 forward-looking scenarios. Describe outlooks as conditional expectations, not facts
@@ -103,9 +205,10 @@ or investment recommendations.
 
 Before answering, check that you addressed the user's actual question, that material
 claims have supporting evidence, and that the evidence is appropriate for the stated
-as-of date and time horizon. Return an executive summary, key findings, outlook,
-risks or limitations, and sources. Keep the briefing focused and suitable for human
-review before external use.
+as-of date and time horizon. Return an executive summary, at least one supported key
+finding with evidence_ids, an outlook, and any limitations. Do not add a separate
+top-level sources field. Keep the briefing focused and suitable for human review
+before external use.
 """,
     retries=2,
 )
@@ -113,59 +216,141 @@ review before external use.
 
 @agent.tool
 def search_documents(ctx: RunContext[MyDeps], inputs: SearchDocumentsInput):
-    """Retrieve relevant chunks from documents by distance"""
-    return retrieve_document_by_distance(
+    """Retrieve cited passage candidates from filings, articles, or generic documents."""
+    chunks = retrieve_document_by_distance(
         query=inputs.query,
         symbol=ctx.deps.symbol,
         document_type=inputs.document_type,
-        top_n=inputs.top_n,
+        top_n=8,
         published_before=ctx.deps.as_of,
         published_after=inputs.published_after,
+        neighbor_radius=1,
     )
+    candidates = build_document_evidence_candidates(
+        inputs.query,
+        chunks,
+        max_candidates=inputs.top_n,
+    )
+    ctx.deps.register_evidence(list(candidates))
+    return {
+        "search": inputs.model_dump(mode="json"),
+        "evidence_candidates": [
+            compact_document_evidence(candidate) for candidate in candidates
+        ],
+    }
 
 
 @agent.tool
 def historical_financials(ctx: RunContext[MyDeps], inputs: FetchFinancialsInput):
-    """Retrieve historical financial data for specified periods"""
+    """Retrieve a bounded set of historical financial metrics and evidence IDs."""
     symbol = ctx.deps.symbol
     reference_id = (
         f"historical_financials:{symbol}:"
         f"{inputs.statement_type}:{inputs.frequency}:{inputs.periods}"
     )
+    data = get_historical_financials(
+        symbol=symbol,
+        statement_type=inputs.statement_type,
+        frequency=inputs.frequency,
+        periods=inputs.periods,
+    )
+    selected_metric_names = set(
+        inputs.metrics or CURATED_FINANCIAL_METRICS[inputs.statement_type]
+    )
+    selected_periods = [
+        {
+            "period_end": period.get("period_end"),
+            "metrics": {
+                name: value
+                for name, value in period.get("metrics", {}).items()
+                if name in selected_metric_names and value is not None
+            },
+        }
+        for period in data.get("periods", [])
+    ]
+    selected_data = {"periods": selected_periods}
+    candidates = build_financial_evidence_candidates(
+        reference_id=reference_id,
+        title=f"{symbol} {inputs.frequency} {inputs.statement_type}",
+        source="Yahoo Finance",
+        url=f"https://finance.yahoo.com/quote/{symbol}/financials/",
+        data=selected_data,
+        path_prefix="data",
+    )
+    metric_candidates = []
+    for candidate in candidates:
+        if ".metrics." not in candidate.field_path:
+            continue
+        period_index = int(candidate.field_path.split(".")[2])
+        metric_candidates.append(
+            candidate.model_copy(
+                update={"period_end": selected_periods[period_index]["period_end"]}
+            )
+        )
+    evidence_by_path = {
+        candidate.field_path: candidate for candidate in metric_candidates
+    }
+    compact_periods = []
+    for period_index, period in enumerate(selected_periods):
+        compact_metrics = []
+        for name, value in period["metrics"].items():
+            field_path = f"data.periods.{period_index}.metrics.{name}"
+            candidate = evidence_by_path[field_path]
+            compact_metrics.append(
+                {
+                    "name": name,
+                    "value": value,
+                    "evidence_id": candidate.evidence_id,
+                }
+            )
+        compact_periods.append(
+            {
+                "period_end": period["period_end"],
+                "metrics": compact_metrics,
+            }
+        )
+
+    ctx.deps.register_evidence(list(metric_candidates))
+    ctx.deps.register_financial_source(reference_id, {"data": data})
     return {
         "reference_id": reference_id,
-        "parameters": inputs.model_dump(),
-        "data": get_historical_financials(
-            symbol=symbol,
-            statement_type=inputs.statement_type,
-            frequency=inputs.frequency,
-            periods=inputs.periods,
+        "statement_type": inputs.statement_type,
+        "frequency": inputs.frequency,
+        "periods": compact_periods,
+        "missing_metrics": sorted(
+            selected_metric_names
+            - {
+                metric["name"]
+                for period in compact_periods
+                for metric in period["metrics"]
+            }
         ),
     }
 
 
 async def run_research_briefing_agent(
     request: BriefingRequest,
-    company_snapshot: dict[str, Any],
-    close_data: list[dict[str, str | float]],
+    prefetched_context: dict[str, Any],
+    evidence_catalog: dict[str, EvidenceRecord],
+    financial_sources: dict[str, object],
     run_id: UUID,
-) -> AgentRunResult[ResearchBriefing]:
+) -> ResearchAgentExecution:
     """Run the bounded research agent with request-scoped tool dependencies."""
     agent_input = {
         **request.model_dump(mode="json"),
-        "prefetched_context": {
-            "company_snapshot": company_snapshot,
-            "recent_close_data": close_data,
-        },
+        "prefetched_context": prefetched_context,
     }
+    deps = MyDeps(
+        symbol=request.symbol.strip().upper(),
+        as_of=request.as_of,
+        evidence_catalog=dict(evidence_catalog),
+        financial_sources=dict(financial_sources),
+    )
 
     async with asyncio.timeout(120):
-        return await agent.run(
+        result = await agent.run(
             json.dumps(agent_input, default=str),
-            deps=MyDeps(
-                symbol=request.symbol.strip().upper(),
-                as_of=request.as_of,
-            ),
+            deps=deps,
             usage_limits=UsageLimits(
                 request_limit=12,
                 tool_calls_limit=10,
@@ -178,3 +363,8 @@ async def run_research_briefing_agent(
                 "component": "research_briefing_agent",
             },
         )
+    return ResearchAgentExecution(
+        result=result,
+        evidence_catalog=dict(deps.evidence_catalog),
+        financial_sources=dict(deps.financial_sources),
+    )

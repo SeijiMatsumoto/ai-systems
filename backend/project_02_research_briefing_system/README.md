@@ -17,13 +17,19 @@ BriefingRequest
 Validate request and check cache
       |
       v
-Agent loop with research tools
+Agent loop with compact evidence candidates
       |
       v
-Structured Briefing
+Draft claims with evidence IDs
       |
       v
-Grounding checks
+Deterministic validation and semantic grounding
+      |
+      v
+One bounded repair attempt; exclude anything still unsupported
+      |
+      v
+Rebuild and verify the narrative from grounded findings
       |
       v
 Markdown and human review
@@ -57,19 +63,41 @@ The agent should receive small, typed Python tools:
 
 Tool responses should have consistent types and include source provenance. Tools should raise explicit errors rather than print failures or silently return `None`.
 
+The model sees compact candidate views rather than complete provenance records. The
+request-scoped dependencies keep the authoritative evidence catalog and raw financial
+sources, protected by a lock because independent tools may execute in parallel. A
+document search returns at most three passages to the model. Internally it retrieves a
+larger seed pool, expands adjacent chunks, removes boilerplate, and globally ranks
+passages so the token bound does not reduce retrieval quality. Historical financials
+return a curated set of metrics unless the agent requests up to 12 exact metric names.
+Daily prices are reduced to start, end, low, and high points before they enter the
+model context.
+
 ## Structured Output
 
-The agent returns a validated `ResearchBriefing` before the application renders it as Markdown.
+The agent returns a `DraftResearchBriefing`. It writes claims and selects stable
+`evidence_id` values from tool results; it does not reproduce quotes, values, URLs,
+or source metadata. Python resolves those IDs from an evidence catalog, validates the
+source locators, and constructs the final `ResearchBriefing`.
 
 Supporting models:
 
-- `EvidenceItem`: source, URL, quote or value, publication time, and retrieval time
-- `Finding`: statement, claim type, confidence, and its supporting evidence
+- `DraftFinding`: statement, claim type, confidence, and selected evidence IDs
+- `DocumentEvidence`: an exact passage and offsets in a stored document chunk
+- `FinancialEvidence`: an exact scalar value and path in structured financial data
+- `Finding`: a draft finding hydrated with authoritative evidence records
 - `ResearchBriefing`: executive summary, key findings, outlook, and limitations
 - `VerificationResult`: unsupported claims, invalid citations, stale evidence, and approval readiness
 
-Evidence is nested under each finding. This is intentionally denormalized so the
-model does not have to generate and correctly join separate claim and evidence IDs.
+Final evidence is nested under each finding for simple API and UI consumption. During
+generation it is normalized into a run-scoped evidence catalog, so the model only
+selects IDs and Python owns the source contents.
+
+Filings and news are not separate evidence models. Both are rows in `Document`, so
+both use `DocumentEvidence`; `document_type` distinguishes `filing`, `article`, and
+`generic`, while `content_quality` distinguishes full text from a snippet. Structured
+financial data uses `FinancialEvidence` because its locator is a `field_path` and its
+authoritative payload is a scalar value rather than document text.
 
 Facts, calculations, inferences, and forward-looking statements should be distinguishable.
 
@@ -86,10 +114,16 @@ Python and the agent runtime enforce:
 Before human review:
 
 - Every externally verifiable claim must reference evidence.
-- Every citation must exist and support its associated claim.
+- Every selected evidence ID must exist in the run-scoped catalog.
+- Document passages must match the stored chunk hash and exact character offsets.
+- Financial values must match the value at the stored source object's field path.
 - Stale, conflicting, or missing evidence must be disclosed.
 - Retrieved documents must be treated as untrusted data, not agent instructions.
-- Unsupported material claims must fail verification.
+- Rejected findings receive one evidence-bounded repair attempt and a second grounding
+  check.
+- Findings that still fail are excluded from the user-facing briefing.
+- The executive summary and outlook are rebuilt from verified findings, checked again,
+  and replaced with deterministic grounded fallbacks if synthesis fails.
 
 ## Caching
 
@@ -122,15 +156,16 @@ Free-form filings and articles are chunked and embedded for retrieval. Frequentl
 - [ ] Normalize return types and validate upstream responses
 - [ ] Add HTTP timeouts, status checks, rate-limit handling, and typed errors
 - [ ] Preserve source, publication, retrieval, and freshness metadata
-- [ ] Implement filtered vector search over stored document chunks
-- [ ] Add unit tests with mocked source clients
+- [x] Implement filtered vector search over stored document chunks
+- [x] Add bounded adjacent-chunk expansion and passage-quality filtering
+- [x] Add unit tests with mocked source clients
 
 ### 2. Define the contracts
 
 - [x] Finish `BriefingRequest`
-- [x] Define `EvidenceItem`, `Finding`, `ResearchBriefing`, and `VerificationResult`
-- [ ] Define typed inputs and outputs for every agent tool
-- [ ] Add Pydantic validation tests
+- [x] Define draft, document, financial, final briefing, and verification contracts
+- [x] Define typed inputs and outputs for every agent tool
+- [x] Add focused evidence-contract and hydration tests
 
 `ResearchTask` and `RunState` are not required for version 1. See [Run State in This Project](RUN_STATE_GUIDE.md) for when explicit application state would become useful.
 
@@ -140,14 +175,16 @@ Free-form filings and articles are chunked and embedded for retrieval. Frequentl
 - [x] Write instructions for source selection, research depth, and citation behavior
 - [x] Run the autonomous tool-calling loop with a step limit and timeout
 - [x] Return a structured `ResearchBriefing`
-- [ ] Trace model calls, tool calls, latency, tokens, and errors
+- [x] Trace model calls, tool calls, latency, tokens, and errors
 
 ### 4. Verify and render
 
-- [ ] Add deterministic schema and citation checks
-- [ ] Add model-assisted claim-to-evidence verification
-- [ ] Produce a `VerificationResult`
-- [ ] Block human-review readiness when material grounding checks fail
+- [x] Add deterministic schema and evidence-locator checks
+- [x] Add model-assisted claim-to-evidence verification
+- [x] Repair rejected findings once and exclude anything still unsupported
+- [x] Rebuild and verify summary and outlook from grounded findings
+- [x] Produce a `VerificationResult`
+- [x] Block human-review readiness when material grounding checks fail
 - [ ] Render the validated briefing as Markdown
 
 ### 5. Cache

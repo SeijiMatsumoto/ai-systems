@@ -8,7 +8,38 @@ export interface BriefingRequest {
   time_horizon: string
 }
 
-export interface EvidenceItem {
+interface EvidenceBase {
+  evidence_id: string
+  reference_id: string
+  title: string
+  url: string | null
+  retrieved_at: string
+  published_at: string | null
+}
+
+export interface DocumentEvidence extends EvidenceBase {
+  evidence_type: 'document'
+  document_type: 'generic' | 'filing' | 'article'
+  content_quality: 'full_text' | 'snippet'
+  document_id: string
+  chunk_id: string
+  chunk_index: number
+  start_char: number
+  end_char: number
+  content_hash: string
+  quote: string
+}
+
+export interface FinancialEvidence extends EvidenceBase {
+  evidence_type: 'financial'
+  source: string
+  field_path: string
+  value: string | number | boolean | null
+  period_end?: string | null
+}
+
+/** Version-1 payload retained so saved runs remain viewable. */
+export interface LegacyEvidenceItem {
   evidence_type: 'financial' | 'document'
   source: string
   reference_id: string
@@ -21,6 +52,8 @@ export interface EvidenceItem {
   chunk_index: number | null
   field_path: string | null
 }
+
+export type EvidenceItem = DocumentEvidence | FinancialEvidence | LegacyEvidenceItem
 
 export interface Finding {
   statement: string

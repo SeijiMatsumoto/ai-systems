@@ -189,7 +189,10 @@ def ingest_news(
                     source_url=article["source_url"],
                     author=article["author"],
                     published_at=article["published_at"],
-                    metadata={"symbol": symbol},
+                    metadata={
+                        "symbol": symbol,
+                        "content_quality": "snippet",
+                    },
                 )
 
                 should_embed = check_should_embed(session, doc_uuid)

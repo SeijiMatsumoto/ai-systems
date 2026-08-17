@@ -116,12 +116,10 @@ async def backfill_company_data(
                     )
 
         failures = sum(
-            result["error"] is not None
-            for result in [*filing_results, *news_results]
+            result["error"] is not None for result in [*filing_results, *news_results]
         )
         total_documents_processed = sum(
-            result["documents_processed"]
-            for result in [*filing_results, *news_results]
+            result["documents_processed"] for result in [*filing_results, *news_results]
         )
         status = "completed" if failures == 0 else "partial"
 

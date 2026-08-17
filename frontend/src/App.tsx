@@ -397,22 +397,46 @@ function LoadingBriefing() {
 }
 
 function EvidenceDisclosure({ evidence }: { evidence: EvidenceItem }) {
+  const isVersionTwo = 'evidence_id' in evidence
+  const content = isVersionTwo
+    ? evidence.evidence_type === 'document'
+      ? evidence.quote
+      : evidence.value
+    : evidence.content
+  const sourceLabel = isVersionTwo
+    ? evidence.title
+    : evidence.title || evidence.source
+  const chunkId =
+    evidence.evidence_type === 'document' && 'chunk_id' in evidence
+      ? evidence.chunk_id
+      : null
+  const fieldPath =
+    evidence.evidence_type === 'financial' && 'field_path' in evidence
+      ? evidence.field_path
+      : null
+
   return (
     <details className="evidence-item">
       <summary>
         <span>
-          <strong>{evidence.title || evidence.source}</strong>
+          <strong>{sourceLabel}</strong>
           <small>
-            {evidence.evidence_type} · {evidence.reference_id}
+            {isVersionTwo && evidence.evidence_type === 'document'
+              ? `${evidence.document_type} · ${evidence.content_quality}`
+              : evidence.evidence_type}{' '}
+            · {evidence.reference_id}
           </small>
         </span>
         <span className="disclosure-label">Evidence</span>
       </summary>
-      <blockquote>{String(evidence.content)}</blockquote>
+      <blockquote>{String(content)}</blockquote>
       <div className="evidence-meta">
         {evidence.published_at && <span>Published {formatDate(evidence.published_at)}</span>}
-        {evidence.chunk_id && <code>chunk {evidence.chunk_id}</code>}
-        {evidence.field_path && <code>{evidence.field_path}</code>}
+        {chunkId && <code>chunk {chunkId}</code>}
+        {fieldPath && <code>{fieldPath}</code>}
+        {'period_end' in evidence && evidence.period_end && (
+          <span>Period ended {formatDate(evidence.period_end)}</span>
+        )}
         {evidence.url && (
           <a href={evidence.url} rel="noreferrer" target="_blank">
             Open source
@@ -453,7 +477,11 @@ function FindingCard({
           {finding.evidence.map((evidence, evidenceIndex) => (
             <EvidenceDisclosure
               evidence={evidence}
-              key={`${evidence.reference_id}-${evidence.chunk_id ?? evidence.field_path ?? evidenceIndex}`}
+              key={
+                'evidence_id' in evidence
+                  ? evidence.evidence_id
+                  : `${evidence.reference_id}-${evidence.chunk_id ?? evidence.field_path ?? evidenceIndex}`
+              }
             />
           ))}
         </div>

@@ -17,9 +17,7 @@ from backend.project_02_research_briefing_system.service.research import (
     run_research_workflow,
 )
 
-DEFAULT_LOGFIRE_PROJECT_URL = (
-    "https://logfire-us.pydantic.dev/seijim27/ai-systems"
-)
+DEFAULT_LOGFIRE_PROJECT_URL = "https://logfire-us.pydantic.dev/seijim27/ai-systems"
 
 
 def parse_datetime(value: str) -> datetime:

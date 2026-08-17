@@ -1,10 +1,13 @@
 from datetime import datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
-from backend.db.schemas import ResearchRunStatus
+from backend.db.schemas import DocumentType, ResearchRunStatus
+
+ScalarValue: TypeAlias = str | int | float | bool | None
+ClaimType: TypeAlias = Literal["fact", "calculation", "inference", "scenario"]
 
 
 class BriefingRequest(BaseModel):
@@ -15,42 +18,71 @@ class BriefingRequest(BaseModel):
     time_horizon: str = Field(min_length=1)
 
 
-class EvidenceItem(BaseModel):
-    evidence_type: Literal["financial", "document"]
-    source: str
-    reference_id: str
-    title: str
-    url: str
-    content: str | int | float  # Quote or structured financial value
+class EvidenceCandidate(BaseModel):
+    """Common identity fields for evidence exposed to the agent."""
+
+    evidence_id: str = Field(min_length=1)
+    reference_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    url: str | None = None
     retrieved_at: datetime
     published_at: datetime | None = None
 
-    # Document evidence
-    chunk_id: str | None = None
-    chunk_index: int | None = None
 
-    # Structured Financial Evidence
-    field_path: str | None = None
+class DocumentEvidence(EvidenceCandidate):
+    """An exact passage in any row represented by the Document table."""
 
-    @model_validator(mode="after")
-    def validate_evidence_locator(self) -> Self:
-        if self.evidence_type == "document" and not self.chunk_id:
-            raise ValueError("Document evidence requires chunk_id")
+    evidence_type: Literal["document"] = "document"
+    document_type: DocumentType
+    content_quality: Literal["full_text", "snippet"]
+    document_id: str
+    chunk_id: str
+    chunk_index: int
+    start_char: int = Field(ge=0)
+    end_char: int = Field(gt=0)
+    content_hash: str = Field(min_length=64, max_length=64)
+    quote: str = Field(min_length=1)
 
-        if self.evidence_type == "document" and not isinstance(self.content, str):
-            raise ValueError("Document evidence content must be a quote")
 
-        if self.evidence_type == "financial" and not self.field_path:
-            raise ValueError("Financial evidence requires field_path")
+class FinancialEvidence(EvidenceCandidate):
+    """A scalar value at a deterministic path in structured financial data."""
 
-        return self
+    evidence_type: Literal["financial"] = "financial"
+    source: str = Field(min_length=1)
+    field_path: str = Field(min_length=1)
+    value: ScalarValue
+    period_end: str | None = None
+
+
+EvidenceRecord: TypeAlias = Annotated[
+    DocumentEvidence | FinancialEvidence,
+    Field(discriminator="evidence_type"),
+]
+
+
+class DraftFinding(BaseModel):
+    """Agent-authored claim containing references, not copied source content."""
+
+    statement: str = Field(min_length=1)
+    claim_type: ClaimType
+    confidence: int = Field(ge=1, le=3)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class DraftResearchBriefing(BaseModel):
+    """The agent output. Python resolves evidence IDs into final evidence records."""
+
+    executive_summary: str
+    key_findings: list[DraftFinding] = Field(min_length=1)
+    outlook: str
+    limitations: list[str] = Field(default_factory=list)
 
 
 class Finding(BaseModel):
     statement: str
-    claim_type: Literal["fact", "calculation", "inference", "scenario"]
+    claim_type: ClaimType
     confidence: int = Field(ge=1, le=3)
-    evidence: list[EvidenceItem] = Field(min_length=1)
+    evidence: list[EvidenceRecord] = Field(default_factory=list)
 
 
 class ResearchBriefing(BaseModel):

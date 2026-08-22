@@ -51,6 +51,11 @@ def retrieve_document_by_distance(
         statement = statement.where(schemas.Document.published_at >= published_after)
     if published_before is not None:
         statement = statement.where(schemas.Document.published_at <= published_before)
+    if document_type == schemas.DocumentType.ARTICLE:
+        statement = statement.filter(
+            schemas.Document.filter_metadata["content_quality"].as_string()
+            == "full_text",
+        )
 
     with db_utils.get_session() as session:
         seed_rows = session.execute(statement).all()

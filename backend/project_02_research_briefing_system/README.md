@@ -143,10 +143,19 @@ Store the source timestamps and identifiers with the cached briefing so its fres
 - [x] Market history through Yahoo Finance
 - [x] Company profile through Yahoo Finance
 - [x] SEC filing ingestion through EDGAR
-- [x] News ingestion through GNews
+- [x] Full-text news ingestion through World News API
 - [ ] Decide later whether Massive adds useful coverage
 
-Free-form filings and articles are chunked and embedded for retrieval. Frequently changing structured data is cached with a source-appropriate TTL.
+Free-form filings and full-text articles are chunked and embedded for retrieval.
+Articles without non-empty full text are rejected before persistence and embedding.
+Article text is cleaned with deterministic title and boilerplate boundaries, unusually
+short extracts are rejected, and normalized headline fingerprints prevent syndicated
+stories from occupying multiple retrieval slots.
+Frequently changing structured data is cached with a source-appropriate TTL.
+
+News ingestion requires `WORLD_NEWS_API_KEY`. The World News API free plan is
+limited to one month of history and requires a visible backlink to
+`https://worldnewsapi.com/` in the application.
 
 ## Implementation Checklist
 
@@ -217,3 +226,5 @@ Free-form filings and articles are chunked and embedded for retrieval. Frequentl
 - Mid-run human approval
 - Multi-agent parallel research
 - Proprietary or synthetic internal notes
+- GNews discovery ingestion with a separate licensed full-text extraction step
+- Guardian API ingestion

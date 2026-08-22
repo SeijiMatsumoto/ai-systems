@@ -16,6 +16,11 @@ from backend.project_02_research_briefing_system.agent.models import (
     ResearchBriefing,
     ScalarValue,
 )
+from backend.shared.article_processing import (
+    MIN_ARTICLE_TEXT_CHARS,
+    looks_like_article_boilerplate,
+    story_key,
+)
 
 EVIDENCE_RECORD_ADAPTER = TypeAdapter(EvidenceRecord)
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+")
@@ -91,6 +96,10 @@ def _is_usable_passage(passage: str, document_type: DocumentType) -> bool:
         return False
     if PAGE_HEADER_PATTERN.fullmatch(normalized):
         return False
+    if document_type == DocumentType.ARTICLE and looks_like_article_boilerplate(
+        passage
+    ):
+        return False
     return len(TOKEN_PATTERN.findall(normalized)) >= minimum_tokens
 
 
@@ -116,6 +125,11 @@ def build_document_evidence_candidates(
         if not content.strip():
             continue
         document_type = DocumentType(str(row["document_type"]))
+        if (
+            document_type == DocumentType.ARTICLE
+            and len(content.strip()) < MIN_ARTICLE_TEXT_CHARS
+        ):
+            continue
         retrieval_similarity = float(row.get("similarity", 0.0))
         for start_char, end_char, quote in split_passages(content):
             if not _is_usable_passage(quote, document_type):
@@ -133,6 +147,7 @@ def build_document_evidence_candidates(
             )
 
     candidates: list[DocumentEvidence] = []
+    seen_article_stories: set[str] = set()
     for (
         _,
         row,
@@ -141,9 +156,12 @@ def build_document_evidence_candidates(
         start_char,
         end_char,
         quote,
-    ) in sorted(ranked_passages, key=lambda item: item[0], reverse=True)[
-        :max_candidates
-    ]:
+    ) in sorted(ranked_passages, key=lambda item: item[0], reverse=True):
+        if document_type == DocumentType.ARTICLE:
+            normalized_story_key = story_key(str(row["title"]))
+            if normalized_story_key in seen_article_stories:
+                continue
+            seen_article_stories.add(normalized_story_key)
         raw_content_quality = row.get("content_quality")
         content_quality = (
             raw_content_quality
@@ -173,6 +191,8 @@ def build_document_evidence_candidates(
                 quote=quote,
             )
         )
+        if len(candidates) == max_candidates:
+            break
     return candidates
 
 

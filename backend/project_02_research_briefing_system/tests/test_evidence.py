@@ -20,6 +20,9 @@ from backend.project_02_research_briefing_system.service.research import (
 
 class EvidenceCatalogTests(unittest.TestCase):
     def test_article_is_document_evidence_with_snippet_quality(self) -> None:
+        article_content = " ".join(
+            ["Apple announced a product launch with material strategic details."] * 12
+        )
         candidates = build_document_evidence_candidates(
             "Apple product launch",
             [
@@ -29,7 +32,7 @@ class EvidenceCatalogTests(unittest.TestCase):
                     "chunk_index": 0,
                     "document_id": "document-1",
                     "document_type": "article",
-                    "content": "Apple announced a product launch.",
+                    "content": article_content,
                     "title": "Apple announcement",
                     "source_url": "https://example.com/apple",
                     "published_at": None,
@@ -42,7 +45,7 @@ class EvidenceCatalogTests(unittest.TestCase):
         self.assertEqual(candidates[0].content_quality, "snippet")
 
         compact = compact_document_evidence(candidates[0])
-        self.assertEqual(compact["quote"], "Apple announced a product launch.")
+        self.assertEqual(compact["quote"], article_content)
         self.assertNotIn("chunk_id", compact)
         self.assertNotIn("content_hash", compact)
 
@@ -121,6 +124,76 @@ class EvidenceCatalogTests(unittest.TestCase):
         )
 
         self.assertEqual(len(candidates), 3)
+
+    def test_article_candidates_reject_boilerplate_and_deduplicate_stories(
+        self,
+    ) -> None:
+        body = " ".join(
+            [
+                "Apple product delays and demand uncertainty may affect execution and investment returns."
+            ]
+            * 10
+        )
+        rows = [
+            {
+                "chunk_id": "chunk-nav",
+                "reference_id": "article-nav",
+                "chunk_index": 0,
+                "document_id": "document-nav",
+                "document_type": "article",
+                "content": "\n".join(
+                    [
+                        "Latest Headlines",
+                        "Top Stories",
+                        "Breaking News",
+                        "Stock Alerts",
+                        "Industry News",
+                        "Earnings Calendar",
+                    ]
+                    * 8
+                ),
+                "similarity": 0.99,
+                "title": "Navigation page",
+                "source_url": "https://example.com/navigation",
+                "published_at": None,
+                "content_quality": "full_text",
+            },
+            {
+                "chunk_id": "chunk-1",
+                "reference_id": "article-1",
+                "chunk_index": 0,
+                "document_id": "document-1",
+                "document_type": "article",
+                "content": body,
+                "similarity": 0.9,
+                "title": "Apple Product Delays Raise Execution Questions",
+                "source_url": "https://example.com/story-one",
+                "published_at": None,
+                "content_quality": "full_text",
+            },
+            {
+                "chunk_id": "chunk-2",
+                "reference_id": "article-2",
+                "chunk_index": 0,
+                "document_id": "document-2",
+                "document_type": "article",
+                "content": body,
+                "similarity": 0.85,
+                "title": "Apple product delays raise execution questions!",
+                "source_url": "https://example.com/story-two",
+                "published_at": None,
+                "content_quality": "full_text",
+            },
+        ]
+
+        candidates = build_document_evidence_candidates(
+            "Apple product execution risk",
+            rows,
+            max_candidates=3,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].reference_id, "article-1")
 
     def test_financial_candidates_keep_resolvable_field_paths(self) -> None:
         data = {"valuation": {"forward_pe": 21.5}, "prices": [{"close": 200.0}]}

@@ -133,7 +133,7 @@ logfire.instrument_pydantic_ai()
 
 model_name = "openai:gpt-5.6-terra"
 prompt_version = "6"
-tool_version = "4"
+tool_version = "5"
 schema_version = "3"
 
 agent = Agent(

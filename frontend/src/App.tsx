@@ -117,6 +117,32 @@ const TOOLS: ToolDefinition[] = [
   },
 ]
 
+const RUN_POLL_INTERVAL_MS = 1_500
+const RUN_STALE_AFTER_MS = 210_000
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+function workflowFromRun(run: ResearchRunDetail): ResearchWorkflowResult {
+  return {
+    run_id: run.run_id,
+    status: run.status,
+    briefing: run.briefing_payload,
+    verification: run.verification_payload,
+  }
+}
+
+function failureMessage(run: ResearchRunDetail) {
+  const message = run.error_payload?.message
+  return typeof message === 'string' ? message : 'Research workflow failed'
+}
+
+function runIsStale(run: ResearchRunDetail) {
+  const startedAt = Date.parse(run.started_at ?? run.created_at)
+  return Number.isFinite(startedAt) && Date.now() - startedAt > RUN_STALE_AFTER_MS
+}
+
 const LOGFIRE_PROJECT_URL =
   import.meta.env.VITE_LOGFIRE_PROJECT_URL ??
   'https://logfire-us.pydantic.dev/seijim27/ai-systems'
@@ -861,25 +887,54 @@ function ResearchWorkspace() {
     window.history.pushState({}, '', url)
   }
 
+  const applyRunDetail = (savedRun: ResearchRunDetail) => {
+    setRunDetail(savedRun)
+    setWorkflow(workflowFromRun(savedRun))
+  }
+
+  const pollRunUntilFinished = async (
+    runId: string,
+    initialRun?: ResearchRunDetail,
+  ) => {
+    let savedRun = initialRun ?? (await getResearchRun(runId))
+
+    while (savedRun.status === 'pending' || savedRun.status === 'running') {
+      applyRunDetail(savedRun)
+      if (runIsStale(savedRun)) {
+        throw new Error(
+          'This research run stopped updating and appears stale. Start a new request or retry after the stale run is cleared.',
+        )
+      }
+      await delay(RUN_POLL_INTERVAL_MS)
+      savedRun = await getResearchRun(runId)
+    }
+
+    applyRunDetail(savedRun)
+    if (savedRun.status === 'failed') {
+      throw new Error(failureMessage(savedRun))
+    }
+    return savedRun
+  }
+
   const showSavedRun = async (runId: string) => {
     setHistoryLoading(true)
     setError(null)
     try {
       const savedRun = await getResearchRun(runId)
-      setRunDetail(savedRun)
-      setWorkflow({
-        run_id: savedRun.run_id,
-        status: savedRun.status,
-        briefing: savedRun.briefing_payload,
-        verification: savedRun.verification_payload,
-      })
+      applyRunDetail(savedRun)
       setRequest({
         ...savedRun.request_payload,
         as_of: localDateTimeFromIso(savedRun.request_payload.as_of),
       })
+      if (savedRun.status === 'pending' || savedRun.status === 'running') {
+        setLoading(true)
+        await pollRunUntilFinished(runId, savedRun)
+        await refreshHistory()
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not load this run')
     } finally {
+      setLoading(false)
       setHistoryLoading(false)
     }
   }
@@ -924,8 +979,8 @@ function ResearchWorkspace() {
       }
       const nextWorkflow = await runResearch(normalizedRequest)
       setWorkflow(nextWorkflow)
-      setRunDetail(await getResearchRun(nextWorkflow.run_id))
       updateRunUrl(nextWorkflow.run_id)
+      await pollRunUntilFinished(nextWorkflow.run_id)
       await refreshHistory()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Research workflow failed')
@@ -986,7 +1041,7 @@ function ResearchWorkspace() {
           )}
 
           {loading && <LoadingBriefing />}
-          {!loading && mode === 'user' && workflow && (
+          {!loading && !error && mode === 'user' && workflow && (
             <BriefingView
               result={workflow}
               symbol={runDetail?.symbol ?? request.symbol}

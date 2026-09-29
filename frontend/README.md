@@ -9,4 +9,4 @@ npm run dev
 
 The research workspace expects the FastAPI app at `backend.main:app` on `http://127.0.0.1:8000` by default. Set `VITE_API_BASE_URL` to change it. The four scaffold pages make no API or model calls. `npm run build` checks TypeScript and creates a static bundle; `npm run lint` runs Oxlint.
 
-See the [repository README](../README.md) for the system map and the [research architecture](../backend/project_02_research_briefing_system/README.md) for runnable prerequisites.
+See the [repository README](../README.md) for the system map and the [research architecture](../backend/research_workflow/README.md) for runnable prerequisites.

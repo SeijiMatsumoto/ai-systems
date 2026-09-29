@@ -7,23 +7,23 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from backend.db.schemas import DocumentType
-from backend.project_02_research_briefing_system.agent.agent import (
+from backend.research_workflow.agent.agent import (
     FetchFinancialsInput,
     InspectNewsInput,
     MyDeps,
     SearchDocumentsInput,
     SearchNewsInput,
 )
-from backend.project_02_research_briefing_system.agent.models import (
+from backend.research_workflow.agent.models import (
     DocumentEvidence,
     FinancialEvidence,
 )
-from backend.project_02_research_briefing_system.service.research import (
+from backend.research_workflow.service.research import (
     validate_financial_evidence,
 )
 
 agent_module = importlib.import_module(
-    "backend.project_02_research_briefing_system.agent.agent"
+    "backend.research_workflow.agent.agent"
 )
 
 

@@ -1,6 +1,6 @@
 import unittest
 
-from backend.project_02_research_briefing_system.agent.evidence import (
+from backend.research_workflow.agent.evidence import (
     build_document_evidence_candidates,
     build_financial_evidence_candidates,
     catalog_from_candidates,
@@ -9,11 +9,11 @@ from backend.project_02_research_briefing_system.agent.evidence import (
     hydrate_briefing,
     split_passages,
 )
-from backend.project_02_research_briefing_system.agent.models import (
+from backend.research_workflow.agent.models import (
     DraftFinding,
     DraftResearchBriefing,
 )
-from backend.project_02_research_briefing_system.service.research import (
+from backend.research_workflow.service.research import (
     _compact_price_summary,
 )
 

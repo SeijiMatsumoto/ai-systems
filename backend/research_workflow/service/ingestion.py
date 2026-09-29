@@ -4,7 +4,7 @@ from typing import Any
 
 import logfire
 
-from backend.project_02_research_briefing_system.data.filings import ingest_filings
+from backend.research_workflow.data.filings import ingest_filings
 
 
 async def backfill_company_data(

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from backend.project_02_research_briefing_system.integrations.world_news import (
+from backend.research_workflow.integrations.world_news import (
     _build_world_news_query,
     fetch_news,
 )
@@ -23,7 +23,7 @@ class WorldNewsTests(unittest.TestCase):
         )
 
     @patch.dict("os.environ", {"WORLD_NEWS_API_KEY": "test-key"})
-    @patch("backend.project_02_research_briefing_system.integrations.world_news.requests.get")
+    @patch("backend.research_workflow.integrations.world_news.requests.get")
     def test_fetch_news_keeps_only_current_full_text_articles(
         self,
         get: Mock,

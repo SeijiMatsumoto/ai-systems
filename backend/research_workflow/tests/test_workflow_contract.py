@@ -3,8 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import ValidationError
 
-from backend.project_02_research_briefing_system.agent.models import BriefingRequest
-from backend.project_02_research_briefing_system.service.research import (
+from backend.research_workflow.agent.models import BriefingRequest
+from backend.research_workflow.service.research import (
     create_fingerprint,
 )
 

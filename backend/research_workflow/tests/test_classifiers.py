@@ -2,7 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from backend.project_02_research_briefing_system.agent.classifiers import (
+from backend.research_workflow.agent.classifiers import (
     FindingRevision,
 )
 

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 
-from backend.project_02_research_briefing_system.agent.models import (
+from backend.research_workflow.agent.models import (
     ClaimType,
     EvidenceRecord,
     Finding,

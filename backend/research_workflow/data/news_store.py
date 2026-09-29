@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.db import db_utils, schemas
-from backend.project_02_research_briefing_system.agent.evidence import split_passages
+from backend.research_workflow.agent.evidence import split_passages
 from backend.shared.article_processing import ARTICLE_CLEANING_VERSION
 
 

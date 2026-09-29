@@ -20,24 +20,24 @@ from pydantic_ai import (
 )
 
 from backend.db import schemas
-from backend.project_02_research_briefing_system.agent.evidence import (
+from backend.research_workflow.agent.evidence import (
     build_document_evidence_candidates,
     build_financial_evidence_candidates,
     compact_document_evidence,
 )
-from backend.project_02_research_briefing_system.agent.models import (
+from backend.research_workflow.agent.models import (
     BriefingRequest,
     DocumentEvidence,
     DraftResearchBriefing,
     EvidenceRecord,
 )
-from backend.project_02_research_briefing_system.data.market_data import (
+from backend.research_workflow.data.market_data import (
     get_historical_financials,
 )
-from backend.project_02_research_briefing_system.data.news_store import (
+from backend.research_workflow.data.news_store import (
     persist_inspected_news_article,
 )
-from backend.project_02_research_briefing_system.integrations.world_news import (
+from backend.research_workflow.integrations.world_news import (
     fetch_news,
 )
 from backend.shared.rag_retrieval import retrieve_document_by_distance

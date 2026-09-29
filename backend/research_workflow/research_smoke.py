@@ -1,7 +1,7 @@
 """Run the research workflow directly without starting FastAPI.
 
 Example:
-    uv run python -m backend.project_02_research_briefing_system.research_smoke
+    uv run python -m backend.research_workflow.research_smoke
 """
 
 import argparse
@@ -12,8 +12,8 @@ from urllib.parse import urlencode
 
 import logfire
 
-from backend.project_02_research_briefing_system.agent.models import BriefingRequest
-from backend.project_02_research_briefing_system.service.research import (
+from backend.research_workflow.agent.models import BriefingRequest
+from backend.research_workflow.service.research import (
     run_research_workflow,
 )
 

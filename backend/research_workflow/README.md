@@ -63,7 +63,7 @@ The UI uses `http://127.0.0.1:8000` by default. Filing setup is in the Admin vie
 ## Offline verification
 
 ```sh
-LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/project_02_research_briefing_system/tests -v
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
 cd frontend && npm run build && npm run lint
 ```
 

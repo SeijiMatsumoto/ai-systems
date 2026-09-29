@@ -12,27 +12,27 @@ from sqlalchemy.orm import Session
 
 from backend.db import db_utils, schemas
 from backend.db.schemas import ResearchRun, ResearchRunStatus
-from backend.project_02_research_briefing_system.agent.agent import (
+from backend.research_workflow.agent.agent import (
     model_name,
     prompt_version,
     run_research_briefing_agent,
     schema_version,
     tool_version,
 )
-from backend.project_02_research_briefing_system.agent.classifiers import (
+from backend.research_workflow.agent.classifiers import (
     revise_finding,
     run_query_classifier,
     synthesize_narrative,
     verify_finding,
 )
-from backend.project_02_research_briefing_system.agent.evidence import (
+from backend.research_workflow.agent.evidence import (
     build_financial_evidence_candidates,
     catalog_from_candidates,
     compact_financial_evidence,
     hydrate_briefing,
     load_evidence_catalog,
 )
-from backend.project_02_research_briefing_system.agent.models import (
+from backend.research_workflow.agent.models import (
     BriefingRequest,
     DocumentEvidence,
     DraftResearchBriefing,
@@ -44,7 +44,7 @@ from backend.project_02_research_briefing_system.agent.models import (
     ResearchWorkflowResult,
     VerificationResult,
 )
-from backend.project_02_research_briefing_system.data.market_data import (
+from backend.research_workflow.data.market_data import (
     get_close_data,
     get_company_snapshot,
 )

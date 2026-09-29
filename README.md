@@ -30,6 +30,8 @@ cd frontend && npm run build && npm run lint
 
 The local environment used for the research demo is Python 3.13. Backend direct dependencies are listed in `backend/requirements.txt`; frontend dependencies are in `frontend/package-lock.json`.
 
+The shared [`llm_runs` schema](backend/db/README.md) is available for cross-system run IDs, lifecycle state, and optional Logfire trace IDs. It is not yet wired into an agent workflow.
+
 ## Scope
 
 This is an architecture portfolio. The research demo does not provide user authentication, source-level access control, human approval actions, or a representative evaluation benchmark. A live research run requires external providers and local infrastructure. Offline checks do not establish live provider behavior or generated briefing quality.

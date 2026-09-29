@@ -107,6 +107,7 @@ def build_document_evidence_candidates(
     query: str,
     retrieved_chunks: Sequence[Mapping[str, Any]],
     max_candidates: int = 3,
+    require_term_overlap: bool = False,
 ) -> list[DocumentEvidence]:
     retrieved_at = datetime.now(timezone.utc)
     ranked_passages: list[
@@ -127,6 +128,7 @@ def build_document_evidence_candidates(
         document_type = DocumentType(str(row["document_type"]))
         if (
             document_type == DocumentType.ARTICLE
+            and row.get("content_quality") != "full_text"
             and len(content.strip()) < MIN_ARTICLE_TEXT_CHARS
         ):
             continue
@@ -149,7 +151,7 @@ def build_document_evidence_candidates(
     candidates: list[DocumentEvidence] = []
     seen_article_stories: set[str] = set()
     for (
-        _,
+        relevance_score,
         row,
         document_type,
         content,
@@ -157,6 +159,8 @@ def build_document_evidence_candidates(
         end_char,
         quote,
     ) in sorted(ranked_passages, key=lambda item: item[0], reverse=True):
+        if require_term_overlap and relevance_score[0] == 0:
+            continue
         if document_type == DocumentType.ARTICLE:
             normalized_story_key = story_key(str(row["title"]))
             if normalized_story_key in seen_article_stories:

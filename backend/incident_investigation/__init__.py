@@ -1,0 +1,1 @@
+"""Incident investigation architecture scaffold."""

@@ -1,7 +1,8 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from backend.project_02_research_briefing_system.data.news import (
+from backend.project_02_research_briefing_system.integrations.world_news import (
     _build_world_news_query,
     fetch_news,
 )
@@ -22,11 +23,13 @@ class WorldNewsTests(unittest.TestCase):
         )
 
     @patch.dict("os.environ", {"WORLD_NEWS_API_KEY": "test-key"})
-    @patch("backend.project_02_research_briefing_system.data.news.requests.get")
-    def test_fetch_news_keeps_only_articles_with_full_text(
+    @patch("backend.project_02_research_briefing_system.integrations.world_news.requests.get")
+    def test_fetch_news_keeps_only_current_full_text_articles(
         self,
         get: Mock,
     ) -> None:
+        as_of = datetime.now(timezone.utc) - timedelta(minutes=1)
+        date_from = as_of - timedelta(days=2)
         complete_article = " ".join(
             ["Apple described a new product strategy with enough detail for research."]
             * 12
@@ -39,22 +42,31 @@ class WorldNewsTests(unittest.TestCase):
             "X-API-Quota-Left": "48.98",
         }
         response.json.return_value = {
-            "available": 2,
+            "available": 3,
             "news": [
                 {
                     "id": 123,
                     "title": "Apple announces a new product",
                     "text": complete_article,
                     "url": "https://example.com/apple-product",
-                    "publish_date": "2026-08-18 12:00:00",
+                    "publish_date": (as_of - timedelta(hours=1)).isoformat(),
                     "authors": ["Jane Doe", "John Doe"],
+                    "summary": None,
                 },
                 {
                     "id": 456,
                     "title": "Apple article with no body",
                     "text": "",
                     "url": "https://example.com/apple-empty",
-                    "publish_date": "2026-08-18 13:00:00",
+                    "publish_date": (as_of - timedelta(hours=1)).isoformat(),
+                    "authors": [],
+                },
+                {
+                    "id": 789,
+                    "title": "Apple future product update",
+                    "text": complete_article,
+                    "url": "https://example.com/apple-future",
+                    "publish_date": (as_of + timedelta(hours=1)).isoformat(),
                     "authors": [],
                 },
             ],
@@ -65,13 +77,15 @@ class WorldNewsTests(unittest.TestCase):
             symbol="AAPL",
             company_name="Apple Inc.",
             query="products OR competition",
-            from_date="2026-08-01",
+            date_from=date_from,
+            date_to=as_of,
             limit=5,
         )
 
         self.assertEqual(len(articles), 1)
         self.assertEqual(articles[0]["reference_id"], "123")
         self.assertEqual(articles[0]["author"], "Jane Doe, John Doe")
+        self.assertIsNone(articles[0]["summary"])
         self.assertEqual(
             articles[0]["content"],
             complete_article,
@@ -80,6 +94,10 @@ class WorldNewsTests(unittest.TestCase):
         self.assertEqual(kwargs["headers"], {"x-api-key": "test-key"})
         self.assertNotIn("api-key", kwargs["params"])
         self.assertEqual(kwargs["params"]["text-match-indexes"], "title,content")
+        self.assertEqual(
+            kwargs["params"]["latest-publish-date"],
+            as_of.strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
     def test_clean_article_text_removes_navigation_and_related_content(self) -> None:
         title = "Apple Lays Off Staff As Vision Pro Demand Disappoints"

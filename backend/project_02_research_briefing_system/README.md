@@ -1,230 +1,74 @@
-# Agentic Research & Briefing System
+# Research Briefing Agent
 
-## Goal
+## Demo contract
 
-Build a client-facing agent that researches a public company using market-data, filing, and news tools, then returns a grounded briefing for human review.
+**Input:** a public-company symbol, timezone-aware `as_of` timestamp, research question, audience, and time horizon.
 
-This project primarily practices writing Python for agentic systems: defining tools, running an autonomous tool-calling loop, producing structured output, enforcing limits, validating citations, and evaluating behavior.
+**Output:** a saved `ResearchBriefing` with an executive summary, findings with source evidence, outlook, limitations, and a `VerificationResult`. The UI exposes the cited passages and financial values alongside the run's verification and trace metadata.
 
-## Architecture
+**Design question:** when should a research agent choose another source, and how can the application keep its final claims tied to exact evidence?
 
-Version 1 uses one autonomous agent. The agent receives the available tools and continues choosing and calling them until it produces a final answer or reaches a configured step limit or timeout.
+## Request flow
 
 ```text
-BriefingRequest
-      |
-      v
-Validate request and check cache
-      |
-      v
-Agent loop with compact evidence candidates
-      |
-      v
-Draft claims with evidence IDs
-      |
-      v
-Deterministic validation and semantic grounding
-      |
-      v
-One bounded repair attempt; exclude anything still unsupported
-      |
-      v
-Rebuild and verify the narrative from grounded findings
-      |
-      v
-Markdown and human review
+React form -> FastAPI -> request fingerprint / saved run
+                         |
+                  query classifier
+                         |
+             company profile + price context
+                         |
+                one bounded research agent
+                 /       |          \
+     stored filings  financials   current news
+         search                     search -> inspect
+                 \       |          /
+                draft findings + evidence IDs
+                         |
+          Python resolves IDs and source locators
+                         |
+            grounding -> one repair attempt
+                         |
+             verified summary and outlook
+                         |
+       saved briefing + verification + diagnostics
 ```
 
-There is no separate planning call, explicit task queue, or application-managed research state in version 1. The agent's message and tool-call context tracks its research trajectory.
+The agent uses a tool loop because source selection depends on intermediate results. The application owns the request schema, allowed tools, step and time budgets, evidence catalog, database writes, and final verification. It does not use multiple research agents or an application-managed planning queue.
 
-A multi-agent design is a possible future experiment, but it should only be added if evaluations show that parallel workers materially improve coverage or latency.
+### Evidence and sources
 
-## Request
+- SEC filings are explicitly loaded through the filing setup panel, chunked, embedded, and searched with metadata filters. This setup uses external services; it is not part of the offline test run.
+- Yahoo Finance supplies a company snapshot, prices, and historical financial statements. Structured financial evidence carries an exact field path and value.
+- World News API is queried during the research run. Search returns compact discovery data; the agent must inspect selected full-text articles before citing them. Inspection stores exact passages and registers citable evidence IDs. The integration enforces the code's 30-day free-plan window and the request's `as_of` cutoff.
+- The model chooses evidence IDs but does not author source metadata. Python hydrates the final output from the run-scoped evidence catalog and verifies document offsets and financial field paths.
 
-`BriefingRequest` contains:
+A grounding classifier checks each finding. A rejected finding receives at most one repair attempt; findings that still fail are excluded. The summary and outlook are rebuilt from retained findings and checked again, with deterministic fallbacks. `approval_ready` describes automated checks; there is no implemented human approve/reject workflow.
 
-- `symbol`
-- `as_of`
-- `research_question`
-- `audience`
-- `time_horizon`
+### State and limits
 
-Comparison companies and other advanced research options are out of scope for version 1.
+Research runs are saved with request, briefing, verification, usage, model/prompt/tool versions, trace ID, and checkpoint data. The request fingerprint includes the full `as_of` instant and workflow versions. The workflow has a 180-second timeout and concurrency limit; the agent has a 120-second timeout and request, tool-call, and token limits. A failed run can resume from the post-agent checkpoint. These controls demonstrate the shape of a bounded workflow, not a guarantee of live reliability.
 
-## Tools
+## Local development
 
-The agent should receive small, typed Python tools:
+Use Python 3.13, PostgreSQL with the `vector` extension, Redis on localhost, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `WORLD_NEWS_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`.
 
-- Search stored filings by query
-- Search stored news by query and date range
-- Fetch the company profile
-- Fetch market data
-- Retrieve the source content needed to verify a citation
+```sh
+# From the repository root, after dependencies and services are ready:
+python -m uvicorn backend.main:app --reload
+cd frontend && npm ci && npm run dev
+```
 
-Tool responses should have consistent types and include source provenance. Tools should raise explicit errors rather than print failures or silently return `None`.
+The UI uses `http://127.0.0.1:8000` by default. Filing setup is in the Admin view. News is discovered during a run, so it does not need a separate backfill. The `research_smoke.py` script is a **live** run and uses external providers and LLM calls; it is intentionally excluded from offline verification.
 
-The model sees compact candidate views rather than complete provenance records. The
-request-scoped dependencies keep the authoritative evidence catalog and raw financial
-sources, protected by a lock because independent tools may execute in parallel. A
-document search returns at most three passages to the model. Internally it retrieves a
-larger seed pool, expands adjacent chunks, removes boilerplate, and globally ranks
-passages so the token bound does not reduce retrieval quality. Historical financials
-return a curated set of metrics unless the agent requests up to 12 exact metric names.
-Daily prices are reduced to start, end, low, and high points before they enter the
-model context.
+## Offline verification
 
-## Structured Output
+```sh
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/project_02_research_briefing_system/tests -v
+cd frontend && npm run build && npm run lint
+```
 
-The agent returns a `DraftResearchBriefing`. It writes claims and selects stable
-`evidence_id` values from tool results; it does not reproduce quotes, values, URLs,
-or source metadata. Python resolves those IDs from an evidence catalog, validates the
-source locators, and constructs the final `ResearchBriefing`.
+Tests mock provider calls and cover evidence contracts, news filtering and inspection, agent tool responses, and request/cache boundaries. They do not establish live provider behavior or briefing quality. There is no representative end-to-end evaluation set yet.
 
-Supporting models:
+## Demo limits
 
-- `DraftFinding`: statement, claim type, confidence, and selected evidence IDs
-- `DocumentEvidence`: an exact passage and offsets in a stored document chunk
-- `FinancialEvidence`: an exact scalar value and path in structured financial data
-- `Finding`: a draft finding hydrated with authoritative evidence records
-- `ResearchBriefing`: executive summary, key findings, outlook, and limitations
-- `VerificationResult`: unsupported claims, invalid citations, stale evidence, and approval readiness
-
-Final evidence is nested under each finding for simple API and UI consumption. During
-generation it is normalized into a run-scoped evidence catalog, so the model only
-selects IDs and Python owns the source contents.
-
-Filings and news are not separate evidence models. Both are rows in `Document`, so
-both use `DocumentEvidence`; `document_type` distinguishes `filing`, `article`, and
-`generic`, while `content_quality` distinguishes full text from a snippet. Structured
-financial data uses `FinancialEvidence` because its locator is a `field_path` and its
-authoritative payload is a scalar value rather than document text.
-
-Facts, calculations, inferences, and forward-looking statements should be distinguishable.
-
-## Limits and Grounding
-
-Python and the agent runtime enforce:
-
-- Maximum agent steps
-- Overall timeout
-- Bounded tool retries
-- Provider rate limits
-- Structured-output validation
-
-Before human review:
-
-- Every externally verifiable claim must reference evidence.
-- Every selected evidence ID must exist in the run-scoped catalog.
-- Document passages must match the stored chunk hash and exact character offsets.
-- Financial values must match the value at the stored source object's field path.
-- Stale, conflicting, or missing evidence must be disclosed.
-- Retrieved documents must be treated as untrusted data, not agent instructions.
-- Rejected findings receive one evidence-bounded repair attempt and a second grounding
-  check.
-- Findings that still fail are excluded from the user-facing briefing.
-- The executive summary and outlook are rebuilt from verified findings, checked again,
-  and replaced with deterministic grounded fallbacks if synthesis fails.
-
-## Caching
-
-Do not reuse a briefing based only on whether it was created in the last 24 hours. Create a fingerprint from the normalized request and relevant workflow versions.
-
-Version 1 fingerprint inputs:
-
-- `BriefingRequest`
-- Prompt version
-- Model version
-- Tool version
-
-Store the source timestamps and identifiers with the cached briefing so its freshness remains inspectable. More advanced source-snapshot invalidation can be added later.
-
-## Data Sources
-
-- [x] Market history through Yahoo Finance
-- [x] Company profile through Yahoo Finance
-- [x] SEC filing ingestion through EDGAR
-- [x] Full-text news ingestion through World News API
-- [ ] Decide later whether Massive adds useful coverage
-
-Free-form filings and full-text articles are chunked and embedded for retrieval.
-Articles without non-empty full text are rejected before persistence and embedding.
-Article text is cleaned with deterministic title and boilerplate boundaries, unusually
-short extracts are rejected, and normalized headline fingerprints prevent syndicated
-stories from occupying multiple retrieval slots.
-Frequently changing structured data is cached with a source-appropriate TTL.
-
-News ingestion requires `WORLD_NEWS_API_KEY`. The World News API free plan is
-limited to one month of history and requires a visible backlink to
-`https://worldnewsapi.com/` in the application.
-
-## Implementation Checklist
-
-### 1. Stabilize the data layer
-
-- [ ] Remove external calls that run during module import
-- [ ] Normalize return types and validate upstream responses
-- [ ] Add HTTP timeouts, status checks, rate-limit handling, and typed errors
-- [ ] Preserve source, publication, retrieval, and freshness metadata
-- [x] Implement filtered vector search over stored document chunks
-- [x] Add bounded adjacent-chunk expansion and passage-quality filtering
-- [x] Add unit tests with mocked source clients
-
-### 2. Define the contracts
-
-- [x] Finish `BriefingRequest`
-- [x] Define draft, document, financial, final briefing, and verification contracts
-- [x] Define typed inputs and outputs for every agent tool
-- [x] Add focused evidence-contract and hydration tests
-
-`ResearchTask` and `RunState` are not required for version 1. See [Run State in This Project](RUN_STATE_GUIDE.md) for when explicit application state would become useful.
-
-### 3. Build the agent
-
-- [x] Configure one agent with the research tools
-- [x] Write instructions for source selection, research depth, and citation behavior
-- [x] Run the autonomous tool-calling loop with a step limit and timeout
-- [x] Return a structured `ResearchBriefing`
-- [x] Trace model calls, tool calls, latency, tokens, and errors
-
-### 4. Verify and render
-
-- [x] Add deterministic schema and evidence-locator checks
-- [x] Add model-assisted claim-to-evidence verification
-- [x] Repair rejected findings once and exclude anything still unsupported
-- [x] Rebuild and verify summary and outlook from grounded findings
-- [x] Produce a `VerificationResult`
-- [x] Block human-review readiness when material grounding checks fail
-- [ ] Render the validated briefing as Markdown
-
-### 5. Cache
-
-- [ ] Normalize and fingerprint each request
-- [ ] Include prompt, model, and tool versions in the fingerprint
-- [ ] Save source metadata with each cached briefing
-- [ ] Add cache-hit and cache-invalidation tests
-
-### 6. Evaluate
-
-- [ ] Create 15–20 representative requests
-- [ ] Include sparse, stale, contradictory, irrelevant, and malicious retrieved content
-- [ ] Measure citation correctness, claim support, completeness, usefulness, latency, and cost
-- [ ] Save failures as regression cases
-- [ ] Use results to decide whether multi-agent research is worth testing
-
-### 7. Expose the system
-
-- [ ] Add a FastAPI endpoint that accepts a request and returns a briefing
-- [ ] Add a simple UI to submit requests and render Markdown
-- [ ] Show citations and verification failures in the UI
-- [ ] Add human approve, revise, and reject actions
-
-## Future Iterations
-
-- Comparison-company research
-- Durable run recovery
-- Asynchronous progress updates
-- Mid-run human approval
-- Multi-agent parallel research
-- Proprietary or synthetic internal notes
-- GNews discovery ingestion with a separate licensed full-text extraction step
-- Guardian API ingestion
+This is a local architecture demonstration. It lacks authentication, source-level access control, human approval actions, a durable worker queue, and measured quality/latency/cost evaluations. The free news window limits historical coverage. Provider failures and data quality can still prevent a successful briefing. The UI renders structured briefing fields and evidence directly rather than exporting Markdown.

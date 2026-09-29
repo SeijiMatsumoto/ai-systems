@@ -1,5 +1,5 @@
 """
-Shared configurations and environment variables for all agent demos.
+Shared configuration for the research briefing demo.
 """
 
 import os
@@ -20,5 +20,3 @@ DB_DIR.mkdir(parents=True, exist_ok=True)
 # API Keys (to be loaded from .env)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-
-# Add other database or vector store configs here as needed

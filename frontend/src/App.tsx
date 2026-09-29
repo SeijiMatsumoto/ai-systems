@@ -22,98 +22,83 @@ interface ToolDefinition {
   category: string
   description: string
   availability: 'ready' | 'planned'
+  flow?: string[]
+  input?: string
+  output?: string
+  boundary?: string
+  firstSlice?: string
+  sourcePath?: string
 }
 
 const TOOLS: ToolDefinition[] = [
   {
-    id: 'backtester',
+    id: 'incident-investigation',
     number: '01',
-    title: 'Strategy Backtester',
-    shortTitle: 'Backtester',
-    category: 'Finance',
-    description: 'Translate investment ideas into executable, self-correcting backtests.',
+    title: 'Incident Investigation',
+    shortTitle: 'Incidents',
+    category: 'Operations',
+    description: 'Investigate service failures from bounded telemetry and produce a cited report.',
     availability: 'planned',
+    flow: ['Alert and window', 'Telemetry queries', 'Evidence set', 'Cited report'],
+    input: 'A service, alert ID, and investigation window over synthetic logs, metrics, traces, and deployments.',
+    output: 'A timeline that separates facts, correlations, and hypotheses, with source locators and unknowns.',
+    boundary: 'Query services narrow telemetry before the agent sees it; every material claim needs evidence.',
+    firstSlice: 'One synthetic incident with an error spike, a nearby deployment, and a misleading correlation.',
+    sourcePath: 'backend/incident_investigation/',
+  },
+  {
+    id: 'coding-agent',
+    number: '02',
+    title: 'Coding Agent',
+    shortTitle: 'Coding',
+    category: 'Developer tools',
+    description: 'Search a fixture repo, edit in isolation, test, and propose a reviewable diff.',
+    availability: 'planned',
+    flow: ['Issue', 'Code search', 'Isolated edit + tests', 'Diff for review'],
+    input: 'An issue against a small fixture repository with explicit allowed paths.',
+    output: 'A unified diff, validation results, explanation, and risks for human review.',
+    boundary: 'The runtime enforces file and execution permissions; tests provide deterministic feedback.',
+    firstSlice: 'One regression fixture with a passing fix and a blocked out-of-scope edit.',
+    sourcePath: 'backend/coding_agent/',
+  },
+  {
+    id: 'knowledge-action',
+    number: '03',
+    title: 'Knowledge + Action',
+    shortTitle: 'Knowledge',
+    category: 'Internal assistant',
+    description: 'Answer across permitted sources and route proposed actions through approval.',
+    availability: 'planned',
+    flow: ['User identity', 'ACL-aware retrieval', 'Cited answer', 'Action approval'],
+    input: 'A synthetic employee question over mock documents and tickets, optionally requesting an action.',
+    output: 'A cited answer and, when appropriate, an action proposal with an explicit approval state.',
+    boundary: 'Access filtering happens before retrieval; a model cannot grant itself action permission.',
+    firstSlice: 'Two users with different document access and one task-creation action that waits for approval.',
+    sourcePath: 'backend/internal_knowledge_action/',
+  },
+  {
+    id: 'customer-support',
+    number: '04',
+    title: 'Customer Support',
+    shortTitle: 'Support',
+    category: 'Customer operations',
+    description: 'Combine policy answers and account tools with action checks and human escalation.',
+    availability: 'planned',
+    flow: ['Customer message', 'Policy + account lookup', 'Policy gate', 'Answer or handoff'],
+    input: 'An authenticated synthetic customer conversation with mock orders and policy records.',
+    output: 'A policy-cited answer, a confirmed action state, or a reasoned human escalation.',
+    boundary: 'Account state comes from APIs; policy and ownership checks govern every action.',
+    firstSlice: 'One policy answer, one eligible cancellation, one blocked action, and one escalation.',
+    sourcePath: 'backend/customer_support/',
   },
   {
     id: 'research',
-    number: '02',
-    title: 'Research Briefing',
+    number: '05',
+    title: 'Research & Workflow',
     shortTitle: 'Research',
-    category: 'Finance',
+    category: 'Research',
     description: 'Produce cited company research with deterministic evidence verification.',
     availability: 'ready',
-  },
-  {
-    id: 'risk-sentinel',
-    number: '03',
-    title: 'Portfolio Risk Sentinel',
-    shortTitle: 'Risk Sentinel',
-    category: 'Risk',
-    description: 'Monitor portfolio signals and escalate material changes for review.',
-    availability: 'planned',
-  },
-  {
-    id: 'regulatory-impact',
-    number: '04',
-    title: 'Regulatory Impact',
-    shortTitle: 'Regulatory',
-    category: 'Compliance',
-    description: 'Map regulatory changes to systems, controls, and operating processes.',
-    availability: 'planned',
-  },
-  {
-    id: 'incident-response',
-    number: '05',
-    title: 'Incident Coordinator',
-    shortTitle: 'Incidents',
-    category: 'Operations',
-    description: 'Coordinate evidence gathering, diagnosis, and human-approved remediation.',
-    availability: 'planned',
-  },
-  {
-    id: 'financial-coach',
-    number: '06',
-    title: 'Financial Wellness',
-    shortTitle: 'Wellness',
-    category: 'Consumer',
-    description: 'Turn personal financial context into an adaptive, explainable plan.',
-    availability: 'planned',
-  },
-  {
-    id: 'knowledge-synthesis',
-    number: '07',
-    title: 'Knowledge Synthesis',
-    shortTitle: 'Knowledge',
-    category: 'Operations',
-    description: 'Surface decisions, conflicts, and dependencies across team knowledge.',
-    availability: 'planned',
-  },
-  {
-    id: 'contract-negotiation',
-    number: '08',
-    title: 'Contract Negotiation',
-    shortTitle: 'Contracts',
-    category: 'Procurement',
-    description: 'Retrieve precedent and model negotiation options within policy boundaries.',
-    availability: 'planned',
-  },
-  {
-    id: 'fraud-patterns',
-    number: '09',
-    title: 'Fraud Pattern Hunter',
-    shortTitle: 'Fraud',
-    category: 'Risk',
-    description: 'Test behavioral fraud hypotheses before promoting detection rules.',
-    availability: 'planned',
-  },
-  {
-    id: 'productivity',
-    number: '10',
-    title: 'Productivity Agent',
-    shortTitle: 'Productivity',
-    category: 'Work',
-    description: 'Plan and adapt work across goals, calendar constraints, and priorities.',
-    availability: 'planned',
   },
 ]
 
@@ -164,10 +149,6 @@ function localDateTimeFromIso(value: string): string {
   return local.toISOString().slice(0, 16)
 }
 
-function dateValue(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
 const DEFAULT_RESEARCH_REQUEST: BriefingRequest = {
   symbol: 'AAPL',
   as_of: localDateTimeValue(),
@@ -179,11 +160,7 @@ const DEFAULT_RESEARCH_REQUEST: BriefingRequest = {
 
 const DEFAULT_BACKFILL_REQUEST: BackfillRequest = {
   symbol: 'AAPL',
-  company_name: 'Apple Inc.',
-  from_date: dateValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)),
-  as_of: dateValue(new Date()),
-  include_filings: true,
-  include_news: true,
+  as_of: new Date().toISOString().slice(0, 10),
   include_8k: true,
 }
 
@@ -261,7 +238,7 @@ function ToolRail({
       </nav>
       <div className="rail-footer">
         <span className="availability-dot ready" />
-        1 tool available
+        1 runnable · 4 architecture scaffolds
       </div>
     </aside>
   )
@@ -272,10 +249,10 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
     <section className="catalog-view">
       <div className="catalog-intro">
         <p className="section-kicker">Workbench</p>
-        <h1>Systems you can operate, inspect, and question.</h1>
+        <h1>Five AI system designs. One runnable demo.</h1>
         <p>
-          A growing collection of Python agent systems built around explicit contracts,
-          bounded autonomy, verification, and observable execution.
+          Compare the request flow, model boundary, and output of common interview systems.
+          The research agent is runnable; the other four are scoped architecture scaffolds.
         </p>
       </div>
 
@@ -303,20 +280,36 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
   )
 }
 
-function PlannedTool({ tool }: { tool: ToolDefinition }) {
+function SystemScaffold({ tool }: { tool: ToolDefinition }) {
   return (
-    <section className="planned-view">
-      <div className="planned-number">{tool.number}</div>
-      <StatusPill status="Planned" />
-      <h1>{tool.title}</h1>
-      <p>{tool.description}</p>
-      <div className="planned-note">
-        <strong>Not implemented yet</strong>
-        <span>
-          This workspace is reserved so each system can eventually expose its own
-          inputs, outputs, run state, and operational diagnostics.
-        </span>
+    <section className="scaffold-view">
+      <div className="scaffold-heading">
+        <span className="scaffold-number">{tool.number}</span>
+        <StatusPill status="Architecture scaffold" />
       </div>
+      <p className="section-kicker">{tool.category}</p>
+      <h1>{tool.title}</h1>
+      <p className="scaffold-description">{tool.description}</p>
+
+      <div className="scaffold-flow" aria-label="Intended request flow">
+        {tool.flow?.map((step, index) => (
+          <div className="scaffold-flow-step" key={step}>
+            <span>{String(index + 1).padStart(2, '0')}</span>
+            <strong>{step}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="scaffold-grid">
+        <div><span>Input</span><p>{tool.input}</p></div>
+        <div><span>Output</span><p>{tool.output}</p></div>
+        <div><span>Key boundary</span><p>{tool.boundary}</p></div>
+        <div><span>First runnable slice</span><p>{tool.firstSlice}</p></div>
+      </div>
+      <p className="scaffold-note">
+        Architecture and proposed contracts only. No agent or API is connected yet.
+        {' '}See <code>{tool.sourcePath}README.md</code> in the repository.
+      </p>
     </section>
   )
 }
@@ -618,7 +611,12 @@ function BriefingView({
         )}
 
         <footer className="note-footer">
-          <span>Generated research · Evidence should be reviewed before investment decisions</span>
+          <span>
+            Generated research · Review cited evidence · News discovery via{' '}
+            <a href="https://worldnewsapi.com/" rel="noreferrer" target="_blank">
+              World News API
+            </a>
+          </span>
           <code>{result.run_id}</code>
         </footer>
       </article>
@@ -648,8 +646,8 @@ function BackfillPanel() {
     <section className="admin-panel backfill-panel">
       <div className="panel-heading">
         <div>
-          <h2>Corpus backfill</h2>
-          <p>Populate filings and topic-bucket news before running research.</p>
+          <h2>Filing setup</h2>
+          <p>Load SEC filings for document search. The agent discovers current news during a run.</p>
         </div>
         {result && <StatusPill status={result.status} />}
       </div>
@@ -662,21 +660,6 @@ function BackfillPanel() {
           />
         </label>
         <label>
-          <span>Company name</span>
-          <input
-            value={request.company_name}
-            onChange={(event) => setRequest({ ...request, company_name: event.target.value })}
-          />
-        </label>
-        <label>
-          <span>From date</span>
-          <input
-            type="date"
-            value={request.from_date}
-            onChange={(event) => setRequest({ ...request, from_date: event.target.value })}
-          />
-        </label>
-        <label>
           <span>As of</span>
           <input
             type="date"
@@ -686,24 +669,18 @@ function BackfillPanel() {
         </label>
       </div>
       <div className="checkbox-row">
-        {[
-          ['include_filings', 'Filings'],
-          ['include_news', 'News'],
-          ['include_8k', '8-K filings'],
-        ].map(([key, label]) => (
-          <label key={key}>
-            <input
-              checked={request[key as keyof Pick<BackfillRequest, 'include_filings' | 'include_news' | 'include_8k'>]}
-              onChange={(event) => setRequest({ ...request, [key]: event.target.checked })}
-              type="checkbox"
-            />
-            {label}
-          </label>
-        ))}
+        <label>
+          <input
+            checked={request.include_8k}
+            onChange={(event) => setRequest({ ...request, include_8k: event.target.checked })}
+            type="checkbox"
+          />
+          Include 8-K filings
+        </label>
       </div>
       {error && <div className="inline-error">{error}</div>}
       <button className="secondary-button" disabled={loading} onClick={submit} type="button">
-        {loading ? 'Backfilling…' : 'Run backfill'}
+        {loading ? 'Loading filings…' : 'Load filings'}
       </button>
       {result && (
         <div className="backfill-result">
@@ -1012,7 +989,7 @@ function ResearchWorkspace() {
       <div className="workspace-heading">
         <div>
           <div className="workspace-title-row">
-            <span className="tool-number-large">02</span>
+            <span className="tool-number-large">05</span>
             <div>
               <h1>Research Briefing</h1>
               <p>{headingMeta}</p>
@@ -1051,7 +1028,7 @@ function ResearchWorkspace() {
           )}
           {!loading && mode === 'user' && !workflow && !error && (
             <div className="empty-state briefing-empty">
-              <span className="empty-index">02</span>
+              <span className="empty-index">05</span>
               <strong>Ask a decision-useful question.</strong>
               <p>The agent will retrieve evidence, produce a structured briefing, and verify every finding before returning it.</p>
             </div>
@@ -1096,7 +1073,7 @@ export default function App() {
         <main className="workspace-canvas">
           {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
           {selectedTool?.id === 'research' && <ResearchWorkspace />}
-          {selectedTool && selectedTool.id !== 'research' && <PlannedTool tool={selectedTool} />}
+          {selectedTool?.availability === 'planned' && <SystemScaffold tool={selectedTool} />}
         </main>
       </div>
     </div>

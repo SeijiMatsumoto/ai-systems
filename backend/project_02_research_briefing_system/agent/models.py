@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.db.schemas import DocumentType, ResearchRunStatus
 
@@ -16,6 +16,13 @@ class BriefingRequest(BaseModel):
     research_question: str = Field(min_length=1)
     audience: str = Field(min_length=1)
     time_horizon: str = Field(min_length=1)
+
+    @field_validator("as_of")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("as_of must include a timezone")
+        return value
 
 
 class EvidenceCandidate(BaseModel):

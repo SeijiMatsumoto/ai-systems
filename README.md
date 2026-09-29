@@ -1,35 +1,34 @@
-# AI Systems Portfolio
+# AI Systems Architecture Demos
 
-This repository is a hands-on portfolio of AI systems built to explore different agent architectures, reliability patterns, and product domains. It is maintained by an AI engineer with more than two years of experience building production software and AI workflows in a hedge-fund environment.
+This repository is an interview-oriented set of five common AI system designs. Each system has a distinct request flow, output contract, and boundary between model judgment and deterministic application code. The emphasis is on explaining and inspecting architecture, not building five production services.
 
-The goal is not to repeat the same chatbot or RAG wrapper across several demos. Each project is intended to make a different system-design problem concrete: multi-agent coordination, tool use, planning, evaluation, long-running workflows, human approval, memory, observability, or safe action-taking.
+| System | Demonstrates | Status |
+| --- | --- | --- |
+| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Architecture scaffold |
+| [Coding Agent](backend/coding_agent/README.md) | Code-aware context, isolated edit/test loop, reviewable diff | Architecture scaffold |
+| [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware retrieval, cited answers, approval before actions | Architecture scaffold |
+| [Customer Support](backend/customer_support/README.md) | Policy and account separation, action checks, escalation | Architecture scaffold |
+| [Research & Workflow](backend/project_02_research_briefing_system/README.md) | Autonomous source selection, cited findings, verification, saved run | Runnable local demo |
 
-## Projects
+The four scaffolds contain design briefs and proposed typed request/output contracts. They have no API routes, agents, provider calls, or executable workflows yet. The React workbench presents their architecture and clearly labels them as scaffolds. The research system is the only runnable application.
 
-| # | System | Primary design focus | Status |
-|---|---|---|---|
-| 01 | [Automated Trading Strategy Backtester](backend/project_01_automated_trading_strategy_backtester/) | Code generation, sandboxed execution, and repair loops | Planned |
-| 02 | [Agentic Research & Briefing System](backend/project_02_research_briefing_system/) | Evidence-grounded research, tool orchestration, and human review | In progress |
-| 03 | [Continuous Portfolio Risk Sentinel](backend/project_03_continuous_portfolio_risk_sentinel/) | Long-running monitoring, memory, and escalation | Planned |
-| 04 | [Client Meeting Prep & Follow-Up Agent](backend/project_04_client_meeting_prep_follow_up_agent/) | Workflow orchestration and action tracking | Planned |
-| 05 | [Regulatory Change Impact Simulator](backend/project_05_regulatory_change_impact_simulator/) | RAG, impact analysis, and approval gates | Planned |
-| 06 | [Autonomous Incident Response Coordinator](backend/project_06_autonomous_incident_response_coordinator/) | Multi-agent diagnosis and controlled remediation | Planned |
-| 07 | [Personalized Financial Wellness Coach](backend/project_07_personalized_financial_wellness_coach/) | Long-term memory and adaptive planning | Planned |
-| 08 | [Cross-Team Knowledge Synthesis](backend/project_08_cross_team_knowledge_synthesis_decision_support/) | Continual synthesis, conflict detection, and knowledge graphs | Planned |
-| 09 | [Vendor Contract Negotiation Assistant](backend/project_09_vendor_contract_negotiation_assistant/) | Scenario analysis and human-in-the-loop iteration | Planned |
-| 10 | [Adaptive Fraud Pattern Hunter](backend/project_10_adaptive_fraud_pattern_hunter/) | Hypothesis generation, testing, and promotion gates | Planned |
-| 11 | [Goal-Driven Productivity Agent](backend/project_11_goal_driven_personal_productivity_agent/) | Goal decomposition, tool use, and replanning | Planned |
+## Research demo
 
-## Repository Structure
+A user asks a question about a public company. The backend gets a company snapshot and price history, then one bounded agent chooses among stored filing search, historical financials, and live news search and inspection. It returns findings that reference evidence IDs. Application code resolves those IDs, checks source locators, runs a bounded grounding and repair pass, and saves the briefing and run diagnostics. The React UI shows citations, verification state, and recent runs.
 
-- `backend/`: Individual system implementations plus shared data and model utilities.
-- `frontend/`: The user interface for exercising and inspecting the systems.
-- `project_ideas.md`: The original problem statements behind the portfolio.
+[Research architecture and local setup](backend/project_02_research_briefing_system/README.md)
 
-Each project README documents its problem, intended architecture, constraints, and execution instructions as the implementation develops. Status labels describe what is present in this repository today; planned projects are design targets, not claims of completed production systems.
+## Offline checks
 
-## What This Portfolio Demonstrates
+These checks use mocks and do not run an agent or call an LLM:
 
-The work emphasizes decisions that matter after a prototype: explicit agent responsibilities, typed state and tool contracts, source provenance, deterministic validation, evaluation datasets, failure handling, cost and latency controls, human approval boundaries, and traces that explain why a run produced its result.
+```sh
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/project_02_research_briefing_system/tests -v
+cd frontend && npm run build && npm run lint
+```
 
-Financial use cases in this repository are educational demonstrations built from public or synthetic data. They are not investment advice and do not contain proprietary employer information.
+The local environment used for the research demo is Python 3.13. Backend direct dependencies are listed in `backend/requirements.txt`; frontend dependencies are in `frontend/package-lock.json`.
+
+## Scope
+
+This is an architecture portfolio. The research demo does not provide user authentication, source-level access control, human approval actions, or a representative evaluation benchmark. A live research run requires external providers and local infrastructure. Offline checks do not establish live provider behavior or generated briefing quality.

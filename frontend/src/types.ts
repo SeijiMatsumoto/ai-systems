@@ -122,20 +122,14 @@ export interface ResearchRunSummary {
 
 export interface BackfillRequest {
   symbol: string
-  company_name: string
-  from_date: string
   as_of: string
-  include_filings: boolean
-  include_news: boolean
   include_8k: boolean
 }
 
 export interface BackfillResult {
   symbol: string
-  company_name: string
   status: 'completed' | 'partial'
   total_documents_processed: number
   failures: number
   filings: Array<Record<string, unknown>>
-  news: Array<Record<string, unknown>>
 }

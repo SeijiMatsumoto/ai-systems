@@ -72,7 +72,7 @@ def create_fingerprint(request: BriefingRequest) -> str:
     fingerprint_input = {
         "request": {
             "symbol": request.symbol.strip().upper(),
-            "as_of": request.as_of.astimezone(timezone.utc).date().isoformat(),
+            "as_of": request.as_of.astimezone(timezone.utc).isoformat(),
             "research_question": " ".join(request.research_question.split()),
             "audience": request.audience.strip().lower(),
             "time_horizon": request.time_horizon.strip().lower(),
@@ -638,9 +638,14 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     "Monitor the verified findings and cited evidence for changes."
                 )
 
-            briefing.limitations = [
-                "Document searches expose at most three ranked passages per tool call."
-            ]
+            briefing.limitations = list(
+                dict.fromkeys(
+                    [
+                        *briefing.limitations,
+                        "Document searches expose at most three ranked passages per tool call.",
+                    ]
+                )
+            )
             if verification.grounding_failures:
                 briefing.limitations.append(
                     "Some candidate findings were excluded after grounding and repair."

@@ -1,8 +1,10 @@
 import asyncio
 import json
+import os
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from uuid import UUID
 
@@ -25,11 +27,18 @@ from backend.project_02_research_briefing_system.agent.evidence import (
 )
 from backend.project_02_research_briefing_system.agent.models import (
     BriefingRequest,
+    DocumentEvidence,
     DraftResearchBriefing,
     EvidenceRecord,
 )
 from backend.project_02_research_briefing_system.data.market_data import (
     get_historical_financials,
+)
+from backend.project_02_research_briefing_system.data.news_store import (
+    persist_inspected_news_article,
+)
+from backend.project_02_research_briefing_system.integrations.world_news import (
+    fetch_news,
 )
 from backend.shared.rag_retrieval import retrieve_document_by_distance
 
@@ -42,12 +51,13 @@ class MyDeps:
     as_of: datetime
     evidence_catalog: dict[str, EvidenceRecord]
     financial_sources: dict[str, object]
+    news_articles: dict[str, dict[str, Any]] = field(default_factory=dict)
     _catalog_lock: threading.Lock = field(
         default_factory=threading.Lock,
         repr=False,
     )
 
-    def register_evidence(self, records: list[EvidenceRecord]) -> None:
+    def register_evidence(self, records: Sequence[EvidenceRecord]) -> None:
         with self._catalog_lock:
             self.evidence_catalog.update(
                 {record.evidence_id: record for record in records}
@@ -61,6 +71,12 @@ class MyDeps:
         with self._catalog_lock:
             self.financial_sources[reference_id] = source
 
+    def register_news_articles(self, articles: list[dict[str, Any]]) -> None:
+        with self._catalog_lock:
+            self.news_articles.update(
+                {str(article["reference_id"]): article for article in articles}
+            )
+
 
 @dataclass
 class ResearchAgentExecution:
@@ -71,7 +87,10 @@ class ResearchAgentExecution:
 
 class SearchDocumentsInput(BaseModel):
     query: str
-    document_type: schemas.DocumentType
+    document_type: Literal[
+        schemas.DocumentType.FILING,
+        schemas.DocumentType.GENERIC,
+    ]
     top_n: int = Field(default=3, ge=1, le=3)
     published_after: datetime | None = None
 
@@ -92,6 +111,37 @@ class FetchFinancialsInput(BaseModel):
             "for the selected statement."
         ),
     )
+
+
+class SearchNewsInput(BaseModel):
+    query: str
+    limit: int = Field(default=5, ge=1, le=10)
+    date_from: datetime | None = None
+
+
+class InspectNewsInput(BaseModel):
+    article_ids: list[str] = Field(min_length=1, max_length=3)
+    focus: str = Field(min_length=1, max_length=300)
+
+
+def _content_preview(content: object, max_chars: int = 400) -> str | None:
+    """Return a bounded source excerpt without asking a model to summarize it."""
+    if not isinstance(content, str):
+        return None
+    normalized = " ".join(content.split())
+    if not normalized:
+        return None
+    if len(normalized) <= max_chars:
+        return normalized
+
+    # Avoid cutting the final word when the article is longer than the preview.
+    truncated = normalized[: max_chars + 1]
+    word_boundary = truncated.rfind(" ", 0, max_chars + 1)
+    if word_boundary > 0:
+        truncated = truncated[:word_boundary]
+    else:
+        truncated = normalized[:max_chars]
+    return f"{truncated.rstrip()}…"
 
 
 CURATED_FINANCIAL_METRICS: dict[str, tuple[str, ...]] = {
@@ -128,12 +178,15 @@ CURATED_FINANCIAL_METRICS: dict[str, tuple[str, ...]] = {
 }
 
 
-logfire.configure(send_to_logfire="if-token-present")
+if os.getenv("LOGFIRE_SEND_TO_LOGFIRE", "").lower() == "false":
+    logfire.configure(send_to_logfire=False)
+else:
+    logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic_ai()
 
 model_name = "openai:gpt-5.6-terra"
-prompt_version = "6"
-tool_version = "5"
+prompt_version = "8"
+tool_version = "8"
 schema_version = "3"
 
 agent = Agent(
@@ -185,15 +238,22 @@ selected evidence supports them. A valuation multiple does not by itself support
 claim about the magnitude or direction of a future share-price reaction. When
 evidence supports only a premise, state that premise rather than a broader conclusion.
 
-Filings and articles are both document evidence. Distinguish them using the
-document_type supplied with each candidate. Article candidates may have
-content_quality=snippet; treat those as useful recent-event signals but do not use a
-snippet as the sole basis for a high-confidence claim.
+Filings and articles are both document evidence. Use search_documents for stored
+filings and other previously embedded documents. For current news, call search_news
+with a targeted query. Evaluate each result using its title and provider summary or
+bounded content_preview. When at least two materially distinct, plausibly relevant
+results are available, inspect two or three of them together; inspect only one when
+it is the sole relevant candidate. Call inspect_news_articles with the selected IDs
+and a specific research focus. Search results are discovery metadata and cannot be
+cited. Only the evidence IDs returned by inspect_news_articles are citable. Use
+filings for primary-source facts and inspected articles for recent developments or
+external context. Do not substitute an old filing for checking whether a relevant
+recent event occurred, but do not cite an article merely to create source diversity.
 
 When the question or time horizon depends on current developments, perform at least
-one targeted search with document_type=article before finishing. Use filings for
-primary-source facts and articles for recent developments or external context. Do
-not substitute an old filing for checking whether a relevant recent event occurred.
+one targeted search_news call and inspect at least one promising result before
+finishing. If inspection returns no matching passages, refine the news query or
+focus rather than citing the search-result metadata.
 
 The historical_financials tool returns a curated metric set by default. Use that
 default first. Supply at most 12 exact metric names only when the question requires
@@ -325,6 +385,147 @@ def historical_financials(ctx: RunContext[MyDeps], inputs: FetchFinancialsInput)
                 for metric in period["metrics"]
             }
         ),
+    }
+
+
+@agent.tool
+def search_news(ctx: RunContext[MyDeps], inputs: SearchNewsInput):
+    as_of = ctx.deps.as_of
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = as_of.astimezone(timezone.utc)
+
+    provider_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=30) + timedelta(minutes=1)
+    )
+    requested_date_from = inputs.date_from or as_of - timedelta(days=30)
+    if requested_date_from.tzinfo is None:
+        requested_date_from = requested_date_from.replace(tzinfo=timezone.utc)
+    else:
+        requested_date_from = requested_date_from.astimezone(timezone.utc)
+
+    # The model may request an older window than the current provider plan allows.
+    # Clamp it instead of failing the entire research run, and disclose the reduced
+    # coverage in the tool response.
+    date_from = max(requested_date_from, provider_cutoff)
+
+    if date_from > as_of:
+        return {
+            "error": "No news is available for this as_of date on the current plan",
+            "requested_date_from": requested_date_from.isoformat(),
+            "provider_earliest_date": provider_cutoff.isoformat(),
+            "as_of": as_of.isoformat(),
+        }
+
+    articles = fetch_news(
+        symbol=ctx.deps.symbol,
+        query=inputs.query,
+        date_from=date_from,
+        date_to=as_of,
+        limit=inputs.limit,
+    )
+    ctx.deps.register_news_articles(articles)
+
+    return {
+        "query": inputs.query,
+        "requested_date_from": requested_date_from.isoformat(),
+        "effective_date_from": date_from.isoformat(),
+        "effective_date_to": as_of.isoformat(),
+        "date_range_limited_by_provider": date_from > requested_date_from,
+        "articles": [
+            {
+                "article_id": article["reference_id"],
+                "title": article["title"],
+                "summary": article["summary"],
+                "content_preview": (
+                    None
+                    if article.get("summary")
+                    else _content_preview(article.get("content"))
+                ),
+                "source_url": article["source_url"],
+                "published_at": article["published_at"],
+            }
+            for article in articles
+        ],
+    }
+
+
+@agent.tool
+def inspect_news_articles(ctx: RunContext[MyDeps], inputs: InspectNewsInput):
+    """Inspect cached full-text articles and register one exact passage per article."""
+    # Step 1: Normalize the run cutoff once so every article uses the same
+    # deterministic as-of comparison.
+    as_of = ctx.deps.as_of
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    else:
+        as_of = as_of.astimezone(timezone.utc)
+
+    # Step 2: Remove duplicate IDs without changing the model's requested order.
+    requested_ids = list(dict.fromkeys(inputs.article_ids))
+    unknown_ids: list[str] = []
+    after_as_of_ids: list[str] = []
+    no_matching_passage_ids: list[str] = []
+    candidates: list[DocumentEvidence] = []
+
+    for article_id in requested_ids:
+        # Step 3: Only inspect articles previously returned by search_news during
+        # this run. Arbitrary IDs and URLs are not accepted.
+        article = ctx.deps.news_articles.get(article_id)
+        if article is None:
+            unknown_ids.append(article_id)
+            continue
+
+        # Step 4: Defensively enforce the run's as-of date even though search_news
+        # already applies the same upper bound at the provider and locally.
+        published_value = article.get("published_at")
+        try:
+            published_at = datetime.fromisoformat(
+                str(published_value).replace("Z", "+00:00")
+            )
+        except ValueError:
+            unknown_ids.append(article_id)
+            continue
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        else:
+            published_at = published_at.astimezone(timezone.utc)
+        if published_at > as_of:
+            after_as_of_ids.append(article_id)
+            continue
+
+        # Step 5: Lazily persist the inspected article as a Document with
+        # non-embedded passage chunks. Repeated inspections reuse unchanged rows.
+        chunk_rows = persist_inspected_news_article(
+            article,
+            symbol=ctx.deps.symbol,
+        )
+
+        # Step 6: Rank exact stored passages against the requested focus. Requiring
+        # token overlap avoids returning an unrelated long paragraph as evidence.
+        article_candidates = build_document_evidence_candidates(
+            inputs.focus,
+            chunk_rows,
+            max_candidates=1,
+            require_term_overlap=True,
+        )
+        if not article_candidates:
+            no_matching_passage_ids.append(article_id)
+            continue
+        candidates.extend(article_candidates)
+
+    # Step 7: Keep authoritative provenance server-side and expose only the compact
+    # passage data the model needs to write and cite a supported finding.
+    ctx.deps.register_evidence(candidates)
+    return {
+        "focus": inputs.focus,
+        "evidence_candidates": [
+            compact_document_evidence(candidate) for candidate in candidates
+        ],
+        "unknown_article_ids": unknown_ids,
+        "articles_after_as_of": after_as_of_ids,
+        "articles_without_matching_passages": no_matching_passage_ids,
     }
 
 

@@ -12,7 +12,6 @@ from backend.db import db_utils
 from backend.db.schemas import ResearchRun
 from backend.project_02_research_briefing_system.agent.models import BriefingRequest
 from backend.project_02_research_briefing_system.data.filings import ingest_filings
-from backend.project_02_research_briefing_system.data.news import ingest_news
 from backend.project_02_research_briefing_system.service.ingestion import (
     backfill_company_data,
 )
@@ -143,55 +142,16 @@ async def ingest_company_filings(request: FilingIngestionRequest):
     }
 
 
-class NewsIngestionRequest(BaseModel):
-    symbol: str = Field(min_length=1, max_length=10)
-    company_name: str | None = Field(default=None, min_length=1, max_length=100)
-    query: str = Field(min_length=1, max_length=200)
-    from_date: date
-    limit: int = Field(default=5, ge=1, le=10)
-
-
-@app.post("/ingestion/news", status_code=201)
-async def ingest_company_news(request: NewsIngestionRequest):
-    documents = await asyncio.to_thread(
-        ingest_news,
-        symbol=request.symbol.strip().upper(),
-        company_name=request.company_name,
-        query=request.query.strip(),
-        from_date=request.from_date.isoformat(),
-        limit=request.limit,
-    )
-
-    return {
-        "symbol": request.symbol.strip().upper(),
-        "documents_ingested": len(documents),
-    }
-
-
 class CompanyBackfillRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=10)
-    company_name: str = Field(min_length=1, max_length=100)
-    from_date: date
     as_of: date
-    include_filings: bool = True
-    include_news: bool = True
     include_8k: bool = True
 
 
 @app.post("/ingestion/company-backfill")
 async def backfill_company(request: CompanyBackfillRequest):
-    if request.from_date > request.as_of:
-        raise HTTPException(
-            status_code=400,
-            detail="from_date must be on or before as_of",
-        )
-
     return await backfill_company_data(
         symbol=request.symbol,
-        company_name=request.company_name,
-        from_date=request.from_date,
         as_of=request.as_of,
-        include_filings=request.include_filings,
-        include_news=request.include_news,
         include_8k=request.include_8k,
     )

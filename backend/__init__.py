@@ -1,1 +1,1 @@
-"""Backend packages for the AI systems portfolio."""
+"""Backend package for AI system architecture demos."""

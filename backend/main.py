@@ -1,8 +1,5 @@
-from fastapi import FastAPI
+"""ASGI entry point for the research briefing demo."""
 
-app = FastAPI()
+from backend.project_02_research_briefing_system.api import app
 
-
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+__all__ = ["app"]

@@ -16,8 +16,8 @@ The user approved this overall sequence, not the implementation details of any p
 
 | Phase | Outcome | Status |
 | --- | --- | --- |
-| 1. Fixture and query tools | Multi-service synthetic telemetry and bounded read-only queries | Implemented; awaiting user review |
-| 2. Investigation loop | Bounded agent, tool steps, and stop reason | Not planned in detail |
+| 1. Fixture and query tools | Multi-service synthetic telemetry and bounded read-only queries | Reviewed and committed (`0922f12`) |
+| 2. Investigation loop | Bounded agent, tool steps, and stop reason | Awaiting detailed plan approval |
 | 3. Report and verification | Typed cited report, deterministic evidence checks, API response | Not planned in detail |
 | 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Not planned in detail |
 | 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Not planned in detail |

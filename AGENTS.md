@@ -14,7 +14,7 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-`backend/research_workflow/` is the only runnable end-to-end system. Incident Investigation has a synthetic fixture and scoped Python query layer but no agent or API yet. The other three directories hold design briefs and proposed contracts. Their frontend pages remain static architecture views. Do not describe an incomplete system as an implemented agent or working API. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+`backend/research_workflow/` is the only runnable end-to-end system. Incident Investigation has a synthetic fixture, scoped Python queries, and a local draft agent, but no report verifier or API yet. The other three directories hold design briefs and proposed contracts. Their frontend pages remain static architecture views. Do not describe an incomplete system as a working end-to-end API. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
@@ -34,6 +34,8 @@ The user approved a five-phase plan for `backend/incident_investigation/`. Appro
 The research system is a FastAPI backend and React/Vite frontend. A bounded single agent selects among filing search, financial data, and current news search/inspection. Python resolves evidence IDs and source locators, checks grounding, performs at most one repair pass, and saves the briefing and diagnostics. The app owns the tool limits, evidence catalog, persistence, and final verification. Its setup and known limits are in `backend/research_workflow/README.md`.
 
 The frontend is in `frontend/`; the ASGI entry point is `backend.main:app`. Shared research data utilities are in `backend/shared/`. Backend dependencies are in `backend/requirements.txt` and frontend dependencies in `frontend/package-lock.json`.
+
+`backend/.env` may contain `TAVILY_API_KEY` for future agents that need web search. No current incident tool uses it; incident evidence remains the synthetic telemetry fixture. The existing research news tool uses World News API. Add a scoped web search tool only when a phase requires it.
 
 ## Verification
 

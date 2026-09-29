@@ -4,13 +4,46 @@ This repository is an interview-oriented set of five common AI system designs. E
 
 | System | Demonstrates | Status |
 | --- | --- | --- |
-| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Synthetic fixture + query layer |
+| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Local draft investigator; API pending |
 | [Coding Agent](backend/coding_agent/README.md) | Code-aware context, isolated edit/test loop, reviewable diff | Architecture scaffold |
 | [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware retrieval, cited answers, approval before actions | Architecture scaffold |
 | [Customer Support](backend/customer_support/README.md) | Policy and account separation, action checks, escalation | Architecture scaffold |
 | [Research & Workflow](backend/research_workflow/README.md) | Autonomous source selection, cited findings, verification, saved run | Runnable local demo |
 
-Incident Investigation has a synthetic telemetry fixture and scoped Python queries, but no agent or API yet. The other three scaffolds contain design briefs and proposed typed request/output contracts. None of those four systems has an executable end-to-end workflow or frontend interaction yet. The React workbench presents their architecture as planned. Research & Workflow is the only runnable application.
+Incident Investigation has a synthetic telemetry fixture, scoped Python queries, and a local draft investigator, but no report verifier or API yet. The other three scaffolds contain design briefs and proposed typed request/output contracts. None of those four systems has an end-to-end frontend interaction yet. The React workbench presents their architecture as planned. Research & Workflow is the only runnable application through the UI.
+
+## Run the backend locally
+
+Run these commands from the repository root. You need Python 3.13 and a local PostgreSQL database with the `vector` extension installed. The current ASGI app exposes the research API; the incident investigator does not have an HTTP route yet.
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+createdb ai_systems
+psql -d ai_systems -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+cp -n backend/.env.example backend/.env
+```
+
+Edit `backend/.env` with your PostgreSQL credentials in `DATABASE_URL`. Set `OPENAI_API_KEY` and `WORLD_NEWS_API_KEY` before running a live research briefing; `/docs` and offline tests do not need provider calls. To export traces, set `LOGFIRE_API_KEY` to a project API key with **Send telemetry** permission (or use `LOGFIRE_TOKEN`) and set `LOGFIRE_SEND_TO_LOGFIRE=true`. The example disables export by default. Offline test commands below override export to `false`.
+
+For a **new** database, create the ORM tables, then start FastAPI:
+
+```sh
+.venv/bin/python -c 'from backend.db.db_utils import init_db; init_db()'
+.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/docs` to inspect the API. For an **existing** database, apply any missing SQL files in `backend/db/migrations/` in numeric order; `init_db()` does not alter existing tables. In particular, migration `004_create_llm_runs.sql` adds the shared run registry. Filing setup uses the API's ingestion route or the frontend Admin view and makes external provider calls.
+
+To run the frontend as well, use a second terminal:
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend defaults to `http://127.0.0.1:8000` for the backend.
 
 ## Research demo
 
@@ -20,17 +53,18 @@ A user asks a question about a public company. The backend gets a company snapsh
 
 ## Offline checks
 
-These checks use mocks and do not run an agent or call an LLM:
+These checks use mocked providers and a local fake model for the incident agent. They do not make external LLM calls:
 
 ```sh
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
+.venv/bin/python -m unittest discover -s backend/db/tests -v
 .venv/bin/python -m unittest discover -s backend/incident_investigation/tests -v
 cd frontend && npm run build && npm run lint
 ```
 
 The local environment used for the research demo is Python 3.13. Backend direct dependencies are listed in `backend/requirements.txt`; frontend dependencies are in `frontend/package-lock.json`.
 
-The shared [`llm_runs` schema](backend/db/README.md) is available for cross-system run IDs, lifecycle state, and optional Logfire trace IDs. It is not yet wired into an agent workflow.
+The shared [`llm_runs` schema](backend/db/README.md) holds cross-system run IDs, lifecycle state, and an optional Logfire trace ID. The local incident investigator uses it for ID and state, and saves its trace ID when Logfire export is enabled. Research & Workflow integration with `llm_runs` remains follow-up work.
 
 ## Scope
 

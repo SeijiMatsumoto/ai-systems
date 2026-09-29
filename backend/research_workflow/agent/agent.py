@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -9,7 +8,6 @@ from typing import Any, Literal
 from uuid import UUID
 
 import logfire
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_ai import (
     Agent,
@@ -19,6 +17,7 @@ from pydantic_ai import (
     UsageLimits,
 )
 
+from backend import observability  # noqa: F401 - configure Logfire before agent creation
 from backend.db import schemas
 from backend.research_workflow.agent.evidence import (
     build_document_evidence_candidates,
@@ -41,8 +40,6 @@ from backend.research_workflow.integrations.world_news import (
     fetch_news,
 )
 from backend.shared.rag_retrieval import retrieve_document_by_distance
-
-load_dotenv("backend/.env")
 
 
 @dataclass
@@ -177,12 +174,6 @@ CURATED_FINANCIAL_METRICS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-
-if os.getenv("LOGFIRE_SEND_TO_LOGFIRE", "").lower() == "false":
-    logfire.configure(send_to_logfire=False)
-else:
-    logfire.configure(send_to_logfire="if-token-present")
-logfire.instrument_pydantic_ai()
 
 model_name = "openai:gpt-5.6-terra"
 prompt_version = "8"

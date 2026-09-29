@@ -1,4 +1,7 @@
-"""Proposed request and report shapes; no investigation runtime yet."""
+"""Investigation request and proposed final report shapes.
+
+The local draft agent lives in agent.py; report verification is not implemented yet.
+"""
 
 from datetime import datetime
 from typing import Literal

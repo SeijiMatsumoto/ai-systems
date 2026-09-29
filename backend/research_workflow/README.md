@@ -50,7 +50,7 @@ Research runs are saved with request, briefing, verification, usage, model/promp
 
 ## Local development
 
-Use Python 3.13, PostgreSQL with the `vector` extension, Redis on localhost, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `WORLD_NEWS_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`.
+Use Python 3.13, PostgreSQL with the `vector` extension, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `WORLD_NEWS_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`. See the [root README](../../README.md#run-the-backend-locally) for step-by-step backend and frontend commands.
 
 ```sh
 # From the repository root, after dependencies and services are ready:

@@ -12,11 +12,11 @@ Follow the repository-root `AGENTS.md` as well. This file records the incident d
 
 ## Phase progress
 
-The user approved this overall sequence, not the implementation details of any phase. Present a concrete plan and wait for approval before starting each phase. After implementation, run relevant offline checks, commit the phase to `main`, and summarize the result for user review before planning the next phase.
+The user approved this overall sequence, not the implementation details of any phase. Present a concrete plan and wait for approval before starting each phase. After implementation, run relevant offline checks and summarize the uncommitted result for user review. Commit to `main` only after the user approves the implementation. Do not plan the next phase before that review.
 
 | Phase | Outcome | Status |
 | --- | --- | --- |
-| 1. Fixture and query tools | Multi-service synthetic telemetry and bounded read-only queries | Awaiting detailed plan and approval |
+| 1. Fixture and query tools | Multi-service synthetic telemetry and bounded read-only queries | Implemented; awaiting user review |
 | 2. Investigation loop | Bounded agent, tool steps, and stop reason | Not planned in detail |
 | 3. Report and verification | Typed cited report, deterministic evidence checks, API response | Not planned in detail |
 | 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Not planned in detail |
@@ -24,4 +24,4 @@ The user approved this overall sequence, not the implementation details of any p
 
 ## Current implementation
 
-As of 2026-09-29, `README.md` and `contracts.py` are design scaffolds. There is no incident API, fixture, query tool, agent, or frontend execution path. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.
+As of 2026-09-29, `fixtures/v1/` and `telemetry.py` provide synthetic telemetry and four scoped Python queries, with offline tests in `tests/`. `contracts.py` remains a proposed report contract. There is no incident API, investigation agent, report verifier, or frontend execution path. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.

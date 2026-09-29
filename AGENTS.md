@@ -14,7 +14,7 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-`backend/research_workflow/` is the only runnable system. The other four directories currently hold design briefs and proposed contracts, while their frontend pages are static architecture views. Do not describe a scaffold as an implemented agent or working API. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+`backend/research_workflow/` is the only runnable end-to-end system. Incident Investigation has a synthetic fixture and scoped Python query layer but no agent or API yet. The other three directories hold design briefs and proposed contracts. Their frontend pages remain static architecture views. Do not describe an incomplete system as an implemented agent or working API. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
@@ -24,6 +24,10 @@ The five systems are:
 - Use synthetic fixtures and mock services for new demos unless a real integration is essential to the architecture. Never use private repositories, real customer data, production telemetry, or external writes as demo fixtures.
 - Keep documentation and status labels aligned with what actually runs. When a scaffold becomes runnable, update its README, the root README, and the frontend description together. State limits plainly; do not claim live quality, reliability, or production readiness based on mocked checks.
 - Avoid adding a framework, agent, queue, or service solely for realism. Add complexity when it demonstrates a meaningful system boundary or failure mode.
+
+## Current incident implementation flow
+
+The user approved a five-phase plan for `backend/incident_investigation/`. Approval of the overview does not approve each phase's details. Before each phase, present a concrete Markdown implementation plan with technical changes and verification criteria, then wait for approval. After approval, implement only that phase, run relevant offline checks, and summarize the uncommitted changes for user review. Commit to `main` only after the user reviews and approves the implementation. Wait for that review before planning or starting the next phase. Track decisions and status in `backend/incident_investigation/AGENTS.md`.
 
 ## Existing research demo
 

@@ -4,13 +4,13 @@ This repository is an interview-oriented set of five common AI system designs. E
 
 | System | Demonstrates | Status |
 | --- | --- | --- |
-| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Architecture scaffold |
+| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Synthetic fixture + query layer |
 | [Coding Agent](backend/coding_agent/README.md) | Code-aware context, isolated edit/test loop, reviewable diff | Architecture scaffold |
 | [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware retrieval, cited answers, approval before actions | Architecture scaffold |
 | [Customer Support](backend/customer_support/README.md) | Policy and account separation, action checks, escalation | Architecture scaffold |
 | [Research & Workflow](backend/research_workflow/README.md) | Autonomous source selection, cited findings, verification, saved run | Runnable local demo |
 
-The four scaffolds contain design briefs and proposed typed request/output contracts. They have no API routes, agents, provider calls, or executable workflows yet. The React workbench presents their architecture and clearly labels them as scaffolds. The research system is the only runnable application.
+Incident Investigation has a synthetic telemetry fixture and scoped Python queries, but no agent or API yet. The other three scaffolds contain design briefs and proposed typed request/output contracts. None of those four systems has an executable end-to-end workflow or frontend interaction yet. The React workbench presents their architecture as planned. Research & Workflow is the only runnable application.
 
 ## Research demo
 
@@ -24,6 +24,7 @@ These checks use mocks and do not run an agent or call an LLM:
 
 ```sh
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
+.venv/bin/python -m unittest discover -s backend/incident_investigation/tests -v
 cd frontend && npm run build && npm run lint
 ```
 

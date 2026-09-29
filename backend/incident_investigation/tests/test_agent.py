@@ -17,7 +17,6 @@ from backend.incident_investigation.contracts import InvestigationRequest
 from backend.incident_investigation.service import run_investigation
 
 
-
 def at(minute: int) -> str:
     return datetime(2026, 4, 14, 14, minute, tzinfo=timezone.utc).isoformat()
 
@@ -27,8 +26,10 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
         LlmRun.__table__.create(self.engine)
         self.request = InvestigationRequest(
-            service="checkout", alert_id="alert-0001",
-            window_start=at(0), window_end=at(59),
+            service="checkout",
+            alert_id="alert-0001",
+            window_start=at(0),
+            window_end=at(59),
         )
 
     def tearDown(self) -> None:
@@ -40,19 +41,42 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             yield session
             session.commit()
 
-    async def test_mock_model_follows_cross_service_evidence_and_records_steps(self) -> None:
+    async def test_mock_model_follows_cross_service_evidence_and_records_steps(
+        self,
+    ) -> None:
         decisions = [
-            ("get_metric_series", {"inputs": {
-                "service": "payments", "metric": "db_connection_wait_ms",
-                "start": at(10), "end": at(45),
-            }}),
-            ("get_metric_series", {"inputs": {
-                "service": "checkout", "metric": "error_rate",
-                "start": at(10), "end": at(45),
-            }}),
-            ("list_changes", {"inputs": {
-                "service": "payments", "start": at(0), "end": at(45),
-            }}),
+            (
+                "get_metric_series",
+                {
+                    "inputs": {
+                        "service": "payments",
+                        "metric": "db_connection_wait_ms",
+                        "start": at(10),
+                        "end": at(45),
+                    }
+                },
+            ),
+            (
+                "get_metric_series",
+                {
+                    "inputs": {
+                        "service": "checkout",
+                        "metric": "error_rate",
+                        "start": at(10),
+                        "end": at(45),
+                    }
+                },
+            ),
+            (
+                "list_changes",
+                {
+                    "inputs": {
+                        "service": "payments",
+                        "start": at(0),
+                        "end": at(45),
+                    }
+                },
+            ),
             ("inspect_trace", {"inputs": {"trace_id": "trace-0028"}}),
         ]
         tool_results: list[dict] = []
@@ -62,7 +86,9 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             for part in latest.parts:
                 if isinstance(part, ToolReturnPart):
                     content = part.content
-                    tool_results.append(json.loads(content) if isinstance(content, str) else content)
+                    tool_results.append(
+                        json.loads(content) if isinstance(content, str) else content
+                    )
             if len(tool_results) < len(decisions):
                 if len(tool_results) == 1:
                     self.assertGreater(
@@ -77,24 +103,47 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
                 name, args = decisions[len(tool_results)]
                 return ModelResponse(parts=[ToolCallPart(name, args)])
             evidence_ids = [
-                max(tool_results[0]["records"], key=lambda point: point["value"])["evidence_id"],
-                max(tool_results[1]["records"], key=lambda point: point["value"])["evidence_id"],
+                max(tool_results[0]["records"], key=lambda point: point["value"])[
+                    "evidence_id"
+                ],
+                max(tool_results[1]["records"], key=lambda point: point["value"])[
+                    "evidence_id"
+                ],
             ]
-            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {
-                "observations": [{
-                    "statement": "Payments connection waits rose during the checkout error window.",
-                    "kind": "correlation", "evidence_ids": evidence_ids[:2],
-                }],
-                "candidate_causes": [],
-                "unknowns": ["Payments trace spans are sampled out for part of the window."],
-                "next_checks": ["Confirm the pool setting with the payments owner."],
-            })])
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "observations": [
+                                {
+                                    "statement": "Payments connection waits rose during the checkout error window.",
+                                    "kind": "correlation",
+                                    "evidence_ids": evidence_ids[:2],
+                                }
+                            ],
+                            "candidate_causes": [],
+                            "unknowns": [
+                                "Payments trace spans are sampled out for part of the window."
+                            ],
+                            "next_checks": [
+                                "Confirm the pool setting with the payments owner."
+                            ],
+                        },
+                    )
+                ]
+            )
 
         outcome = await run_investigation(
-            self.request, session_scope=self.sessions,
+            self.request,
+            session_scope=self.sessions,
             model=FunctionModel(model_function),
         )
-        self.assertEqual(outcome.status, "completed", msg=f"{outcome.error_type}: {outcome.tool_steps}")
+        self.assertEqual(
+            outcome.status,
+            "completed",
+            msg=f"{outcome.error_type}: {outcome.tool_steps}",
+        )
         self.assertEqual(outcome.stop_reason, "completed")
         self.assertEqual(len(outcome.tool_steps), 4)
         self.assertEqual(outcome.tool_steps[-1].coverage_gaps[0].service, "payments")
@@ -107,6 +156,11 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("2026-04-14T14:15:00Z", selected_times)
         self.assertIn("2026-04-14T14:42:00Z", selected_times)
         self.assertIsNotNone(outcome.draft)
+        self.assertTrue(outcome.verification.passed)
+        self.assertTrue(outcome.report.review_required)
+        self.assertEqual(len(outcome.report.timeline), 1)
+        self.assertEqual(outcome.report.timeline[0].kind, "correlation")
+        self.assertEqual(outcome.report.coverage_gaps[0].service, "payments")
         self.assertIsNone(outcome.logfire_trace_id)
         self.assertIn(
             outcome.draft.observations[0].evidence_ids[0],
@@ -125,18 +179,43 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             nonlocal calls
             calls += 1
             if calls == 1:
-                return ModelResponse(parts=[ToolCallPart("search_logs", {"inputs": {
-                    "service": "email-worker", "start": at(0), "end": at(20),
-                }})])
-            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {
-                "observations": [], "candidate_causes": [], "unknowns": [], "next_checks": [],
-            })])
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            "search_logs",
+                            {
+                                "inputs": {
+                                    "service": "email-worker",
+                                    "start": at(0),
+                                    "end": at(20),
+                                }
+                            },
+                        )
+                    ]
+                )
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "observations": [],
+                            "candidate_causes": [],
+                            "unknowns": [],
+                            "next_checks": [],
+                        },
+                    )
+                ]
+            )
 
         outcome = await run_investigation(
-            self.request, session_scope=self.sessions,
+            self.request,
+            session_scope=self.sessions,
             model=FunctionModel(model_function),
         )
-        self.assertEqual(outcome.status, "completed", msg=f"{outcome.error_type}: {outcome.tool_steps}")
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.stop_reason, "verification_failed")
+        self.assertEqual(outcome.verification.issues[0].code, "empty_report")
+        self.assertIsNone(outcome.report)
         self.assertEqual(outcome.tool_steps[0].returned_evidence_ids, [])
         self.assertIn("outside investigation scope", outcome.tool_steps[0].error)
 
@@ -146,8 +225,10 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             return ModelResponse(parts=[])
 
         outcome = await run_investigation(
-            self.request, session_scope=self.sessions,
-            model=FunctionModel(slow_model), timeout_seconds=0.005,
+            self.request,
+            session_scope=self.sessions,
+            model=FunctionModel(slow_model),
+            timeout_seconds=0.005,
         )
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.stop_reason, "timeout")
@@ -157,12 +238,24 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_tool_budget_exhaustion_marks_run_failed(self) -> None:
         async def repeated_query(messages, info):
-            return ModelResponse(parts=[ToolCallPart("list_changes", {"inputs": {
-                "service": "payments", "start": at(0), "end": at(45),
-            }})])
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "list_changes",
+                        {
+                            "inputs": {
+                                "service": "payments",
+                                "start": at(0),
+                                "end": at(45),
+                            }
+                        },
+                    )
+                ]
+            )
 
         outcome = await run_investigation(
-            self.request, session_scope=self.sessions,
+            self.request,
+            session_scope=self.sessions,
             model=FunctionModel(repeated_query),
         )
         self.assertEqual(outcome.status, "failed")
@@ -176,7 +269,8 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("synthetic model failure")
 
         outcome = await run_investigation(
-            self.request, session_scope=self.sessions,
+            self.request,
+            session_scope=self.sessions,
             model=FunctionModel(broken_model),
         )
         self.assertEqual(outcome.stop_reason, "agent_error")

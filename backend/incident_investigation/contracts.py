@@ -1,12 +1,13 @@
-"""Investigation request and proposed final report shapes.
+"""Investigation request, cited report, and verification result shapes."""
 
-The local draft agent lives in agent.py; report verification is not implemented yet.
-"""
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from backend.incident_investigation.telemetry import CoverageGap
 
 
 class InvestigationRequest(BaseModel):
@@ -18,9 +19,11 @@ class InvestigationRequest(BaseModel):
 
 class TelemetryEvidence(BaseModel):
     evidence_id: str
-    source: Literal["log", "metric", "trace", "deployment", "alert"]
+    source: Literal["log", "metric", "trace", "change", "alert"]
+    service: str
     locator: str
     observed_at: datetime
+    excerpt: str
 
 
 class IncidentClaim(BaseModel):
@@ -33,5 +36,24 @@ class IncidentReport(BaseModel):
     timeline: list[IncidentClaim]
     likely_causes: list[IncidentClaim]
     unknowns: list[str]
+    next_checks: list[str]
+    coverage_gaps: list[CoverageGap]
     evidence: list[TelemetryEvidence]
     review_required: bool = True
+
+
+class VerificationIssue(BaseModel):
+    code: Literal[
+        "empty_report",
+        "invalid_kind",
+        "unknown_evidence",
+        "not_surfaced",
+        "outside_scope",
+    ]
+    path: str
+    evidence_id: str | None = None
+
+
+class VerificationResult(BaseModel):
+    passed: bool
+    issues: list[VerificationIssue]

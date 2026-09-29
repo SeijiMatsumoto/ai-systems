@@ -4,17 +4,17 @@ This repository is an interview-oriented set of five common AI system designs. E
 
 | System | Demonstrates | Status |
 | --- | --- | --- |
-| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Local draft investigator; API pending |
+| [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Runnable backend API; frontend pending |
 | [Coding Agent](backend/coding_agent/README.md) | Code-aware context, isolated edit/test loop, reviewable diff | Architecture scaffold |
 | [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware retrieval, cited answers, approval before actions | Architecture scaffold |
 | [Customer Support](backend/customer_support/README.md) | Policy and account separation, action checks, escalation | Architecture scaffold |
 | [Research & Workflow](backend/research_workflow/README.md) | Autonomous source selection, cited findings, verification, saved run | Runnable local demo |
 
-Incident Investigation has a synthetic telemetry fixture, scoped Python queries, and a local draft investigator, but no report verifier or API yet. The other three scaffolds contain design briefs and proposed typed request/output contracts. None of those four systems has an end-to-end frontend interaction yet. The React workbench presents their architecture as planned. Research & Workflow is the only runnable application through the UI.
+Incident Investigation has a synthetic telemetry fixture, scoped Python queries, a bounded investigator, citation checks, and a backend API. Its frontend remains an architecture view. The other three scaffolds contain design briefs and proposed typed request/output contracts. Research & Workflow is the only runnable application through the UI.
 
 ## Run the backend locally
 
-Run these commands from the repository root. You need Python 3.13 and a local PostgreSQL database with the `vector` extension installed. The current ASGI app exposes the research API; the incident investigator does not have an HTTP route yet.
+Run these commands from the repository root. You need Python 3.13 and a local PostgreSQL database with the `vector` extension installed. The ASGI app exposes both the research API and `POST /agent/incident_investigation`.
 
 ```sh
 python3.13 -m venv .venv
@@ -34,6 +34,8 @@ For a **new** database, create the ORM tables, then start FastAPI:
 ```
 
 Open `http://127.0.0.1:8000/docs` to inspect the API. For an **existing** database, apply any missing SQL files in `backend/db/migrations/` in numeric order; `init_db()` does not alter existing tables. In particular, migration `004_create_llm_runs.sql` adds the shared run registry. Filing setup uses the API's ingestion route or the frontend Admin view and makes external provider calls.
+
+The incident route accepts `service=checkout`, `alert_id=alert-0001`, and an investigation window within the fixture's `2026-04-14T14:00:00Z` to `2026-04-14T14:59:00Z` range. It runs the configured model if called normally; the offline checks below use a fake model.
 
 To run the frontend as well, use a second terminal:
 

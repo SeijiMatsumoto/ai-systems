@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from backend.db import db_utils
 from backend.db.llm_runs import complete_run, create_run, fail_run, start_run
-from backend.observability import EXPORT_ENABLED
 from backend.incident_investigation.agent import (
     MAX_TOOL_CALLS,
     InvestigationDraft,
@@ -26,9 +25,14 @@ from backend.incident_investigation.agent import (
     ToolStep,
     agent,
 )
-from backend.incident_investigation.contracts import InvestigationRequest
+from backend.incident_investigation.contracts import (
+    IncidentReport,
+    InvestigationRequest,
+    VerificationResult,
+)
 from backend.incident_investigation.telemetry import TelemetryStore
-
+from backend.incident_investigation.verification import verify_report
+from backend.observability import EXPORT_ENABLED
 
 SessionScope = Callable[[], AbstractContextManager[Session]]
 RUN_TIMEOUT_SECONDS = 90
@@ -38,8 +42,12 @@ RUN_TIMEOUT_SECONDS = 90
 class InvestigationExecution:
     run_id: uuid.UUID
     status: Literal["completed", "failed"]
-    stop_reason: Literal["completed", "timeout", "budget_exhausted", "agent_error"]
+    stop_reason: Literal[
+        "completed", "timeout", "budget_exhausted", "agent_error", "verification_failed"
+    ]
     draft: InvestigationDraft | None
+    report: IncidentReport | None
+    verification: VerificationResult | None
     tool_steps: list[ToolStep]
     surfaced_evidence_ids: list[str]
     logfire_trace_id: str | None
@@ -49,7 +57,9 @@ class InvestigationExecution:
 
 def _prompt(store: TelemetryStore, deps: InvestigatorDeps) -> str:
     available_metrics = {
-        service: sorted({point.metric for point in store.metrics if point.service == service})
+        service: sorted(
+            {point.metric for point in store.metrics if point.service == service}
+        )
         for service in sorted(deps.scope.allowed_services)
     }
     context = {
@@ -59,7 +69,8 @@ def _prompt(store: TelemetryStore, deps: InvestigatorDeps) -> str:
         "allowed_services": sorted(deps.scope.allowed_services),
         "available_metrics": available_metrics,
         "declared_coverage_gaps": [
-            gap.model_dump(mode="json") for gap in store.manifest.coverage_gaps
+            gap.model_dump(mode="json")
+            for gap in store.manifest.coverage_gaps
             if gap.service in deps.scope.allowed_services
         ],
         "tool_call_budget": MAX_TOOL_CALLS,
@@ -75,11 +86,13 @@ async def run_investigation(
     model: Model | str | None = None,
     timeout_seconds: float = RUN_TIMEOUT_SECONDS,
 ) -> InvestigationExecution:
-    """Execute one agent draft; Phase 3 will verify its claims and citations."""
+    """Execute one draft and verify its citations before accepting a report."""
     store = store or TelemetryStore()
     if request.service != store.manifest.alert.service:
         raise ValueError("request service does not match alert service")
-    scope = store.scope_for_alert(request.alert_id, request.window_start, request.window_end)
+    scope = store.scope_for_alert(
+        request.alert_id, request.window_start, request.window_end
+    )
     deps = InvestigatorDeps(store=store, scope=scope)
 
     with session_scope() as session:
@@ -112,7 +125,10 @@ async def run_investigation(
                         total_tokens_limit=25_000,
                         output_tokens_limit=4_000,
                     ),
-                    metadata={"run_id": str(run_id), "system_key": "incident_investigation"},
+                    metadata={
+                        "run_id": str(run_id),
+                        "system_key": "incident_investigation",
+                    },
                 )
             usage = asdict(result.usage)
             if any(step.error == "tool call budget exhausted" for step in deps.steps):
@@ -126,17 +142,35 @@ async def run_investigation(
             with session_scope() as session:
                 fail_run(session, run_id, logfire_trace_id=trace_id)
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - provider and tool failures are reported as failed runs
             stop_reason = "agent_error"
             error_type = type(exc).__name__
         else:
+            try:
+                report, verification = verify_report(
+                    result.output,
+                    store=store,
+                    scope=scope,
+                    surfaced_evidence_ids=deps.surfaced_evidence_ids,
+                )
+            except Exception:
+                with session_scope() as session:
+                    fail_run(session, run_id, logfire_trace_id=trace_id)
+                raise
             with session_scope() as session:
-                complete_run(session, run_id)
+                if verification.passed:
+                    complete_run(session, run_id)
+                else:
+                    fail_run(session, run_id, logfire_trace_id=trace_id)
             return InvestigationExecution(
                 run_id=run_id,
-                status="completed",
-                stop_reason="completed",
+                status="completed" if verification.passed else "failed",
+                stop_reason="completed"
+                if verification.passed
+                else "verification_failed",
                 draft=result.output,
+                report=report,
+                verification=verification,
                 tool_steps=list(deps.steps),
                 surfaced_evidence_ids=sorted(deps.surfaced_evidence_ids),
                 logfire_trace_id=trace_id,
@@ -150,6 +184,8 @@ async def run_investigation(
             status="failed",
             stop_reason=stop_reason,
             draft=None,
+            report=None,
+            verification=None,
             tool_steps=list(deps.steps),
             surfaced_evidence_ids=sorted(deps.surfaced_evidence_ids),
             logfire_trace_id=trace_id,

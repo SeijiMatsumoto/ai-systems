@@ -14,7 +14,7 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-`backend/research_workflow/` is the only runnable end-to-end system. Incident Investigation has a synthetic fixture, scoped Python queries, and a local draft agent, but no report verifier or API yet. The other three directories hold design briefs and proposed contracts. Their frontend pages remain static architecture views. Do not describe an incomplete system as a working end-to-end API. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+`backend/research_workflow/` is the only runnable system through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, and a backend API, but its frontend remains an architecture view. The other three directories hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
@@ -47,3 +47,5 @@ cd frontend && npm run build && npm run lint
 ```
 
 Run the relevant checks for changed code, plus `git diff --check`. If dependencies or local services are unavailable, say exactly which check could not run. Do not make external provider calls merely to prove an architecture demo works.
+
+After editing Python files, apply the repository's Ruff save behavior to the changed files: `ruff check --fix <files>` followed by `ruff format <files>`. Then run `ruff check <files>` and `ruff format --check <files>` before requesting review.

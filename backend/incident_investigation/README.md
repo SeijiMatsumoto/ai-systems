@@ -1,6 +1,6 @@
 # Incident Investigation & Reporting Agent
 
-**Status:** synthetic telemetry fixture, read-only query layer, and local bounded draft agent are implemented. There is no incident API, report verifier, or frontend execution path yet.
+**Status:** synthetic telemetry fixture, read-only query layer, bounded investigator, citation checks, and backend API are implemented. The frontend execution path is pending.
 
 ## Demo contract
 
@@ -19,11 +19,13 @@ The checked-in `fixtures/v1/` dataset covers a checkout error spike across gatew
 
 `telemetry.py` loads and validates the fixture, derives an investigation scope from the alert, and exposes four read-only queries: `search_logs`, `get_metric_series`, `inspect_trace`, and `list_changes`. They enforce service and time bounds, validate filters, cap results, and return source locators plus truncation or coverage-gap metadata. They are Python functions wrapped as agent tools, not HTTP routes yet.
 
-`agent.py` exposes those queries as typed tools for one Pydantic AI investigator. The model sees the alert, allowed services, available metric names, and declared coverage gaps, then chooses follow-up queries. Metric results are condensed to at most 12 exact points with evidence IDs. Python records each tool step, enforces an eight-call application budget plus model request/token/time limits, and returns an unverified `InvestigationDraft`. `service.py` gives the run a shared `llm_runs` UUID and moves it to completed or failed. Completed means the draft agent finished; it does not mean its claims passed verification. Tool steps and the draft are currently returned in memory rather than saved.
+`agent.py` exposes those queries as typed tools for one Pydantic AI investigator. The model sees the alert, allowed services, available metric names, and declared coverage gaps, then chooses follow-up queries. Metric results are condensed to at most 12 exact points with evidence IDs. Python records each tool step and enforces an eight-call application budget plus model request/token/time limits. `verification.py` resolves cited IDs to source records, rejects IDs that were not surfaced or are outside scope, checks claim placement, orders the timeline, and discloses fixture coverage gaps. It does not establish that free-form claim text accurately interprets a source; engineer review is always required. A draft with no cited observations or failed checks fails the run.
+
+`POST /agent/incident_investigation` on `backend.main:app` accepts an alert, service, and time window. It returns the cited report or structured verification issues, run status, stop reason, tool steps, usage, and optional Logfire trace ID. The report and tool steps are response-only; `llm_runs` persists the run identity and state, not the report. There is no incident frontend yet.
 
 The incident telemetry is the checked-in synthetic fixture, not data fetched from Logfire. The agent's tool steps are returned in memory. With a telemetry-write `LOGFIRE_API_KEY` (or `LOGFIRE_TOKEN`) and `LOGFIRE_SEND_TO_LOGFIRE=true`, the service exports its run span and records its trace ID in `llm_runs`. When export is disabled, that field remains empty. The shared backend setup also instruments Pydantic AI. Offline tests disable export and make no live model calls.
 
-The next phases will add deterministic report verification, an incident API, and a UI showing the timeline beside the tool trace and source excerpts.
+The next phase will add a UI showing the timeline beside the tool trace and source excerpts.
 
 ## Offline checks
 
@@ -31,7 +33,7 @@ The next phases will add deterministic report verification, an incident API, and
 .venv/bin/python -m unittest discover -s backend/incident_investigation/tests -v
 ```
 
-These tests inspect the fixture, query behavior, and draft agent with a local fake model. They make no real LLM calls, Logfire export, or external telemetry queries.
+These tests inspect the fixture, query behavior, draft agent, report checks, and API response with a local fake model. They make no real LLM calls, Logfire export, or external telemetry queries.
 
 ## Boundaries and acceptance
 

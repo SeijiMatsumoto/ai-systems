@@ -38,13 +38,13 @@ const TOOLS: ToolDefinition[] = [
     title: 'Incident Investigation',
     shortTitle: 'Incidents',
     category: 'Operations',
-    description: 'Investigate service failures from bounded telemetry and produce a cited report.',
+    description: 'Replay service logs, classify incident candidates, and produce a cited report.',
     availability: 'ready',
-    flow: ['Alert and window', 'Telemetry queries', 'Evidence set', 'Cited report'],
-    input: 'A service, alert ID, and investigation window over synthetic logs, metrics, traces, and deployments.',
+    flow: ['Log stream', 'Group and classify', 'Scoped investigation', 'Cited report'],
+    input: 'A synthetic multi-service log stream and a maximum of one to three reports per replay.',
     output: 'A timeline that separates facts, correlations, and hypotheses, with source locators and unknowns.',
     boundary: 'Query services narrow telemetry before the agent sees it; every material claim needs evidence.',
-    firstSlice: 'One synthetic incident with an error spike, a nearby deployment, and a misleading correlation.',
+    firstSlice: 'One synthetic checkout incident, an inventory fallback nonincident, and a nearby misleading deployment.',
     sourcePath: 'backend/incident_investigation/',
   },
   {
@@ -134,6 +134,9 @@ const LOGFIRE_PROJECT_URL =
   'https://logfire-us.pydantic.dev/seijim27/ai-systems'
 
 function toolFromLocation(): ToolDefinition | null {
+  if (window.location.pathname === '/incident-investigation' || window.location.pathname.startsWith('/incident-investigation/')) {
+    return TOOLS[0]
+  }
   const toolId = new URLSearchParams(window.location.search).get('tool')
   return TOOLS.find((tool) => tool.id === toolId) ?? null
 }
@@ -1059,9 +1062,12 @@ export default function App() {
 
   const navigateToTool = (tool: ToolDefinition | null) => {
     const url = new URL(window.location.href)
-    if (tool) url.searchParams.set('tool', tool.id)
+    url.pathname = tool?.id === 'incident-investigation' ? '/incident-investigation' : '/'
+    if (tool && tool.id !== 'incident-investigation') url.searchParams.set('tool', tool.id)
     else url.searchParams.delete('tool')
     if (!tool || tool.id !== 'research') url.searchParams.delete('run')
+    if (tool?.id === 'incident-investigation') url.searchParams.set('tab', 'run')
+    else url.searchParams.delete('tab')
     window.history.pushState({}, '', url)
     setSelectedTool(tool)
   }

@@ -1,0 +1,16 @@
+{
+  "cluster_id": "cluster-0115",
+  "trigger_log_id": "logs-0133",
+  "trigger_service": "checkout",
+  "observed_at": "2026-04-14T14:19:18Z",
+  "services": ["checkout", "gateway"],
+  "distinct_error_requests_last_5m": 3,
+  "log_levels": {"ERROR": 5},
+  "representative_messages": [
+    "Checkout upstream returned HTTP 503",
+    "Payment authorization timed out; order failed"
+  ],
+  "log_evidence_ids": ["logs-0115", "logs-0116", "logs-0124", "logs-0125", "logs-0133"],
+  "latest_error_rates": {"gateway": 0.062, "checkout": 0.143},
+  "metric_evidence_ids": ["metrics-0407", "metrics-0401"]
+}

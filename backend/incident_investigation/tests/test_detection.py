@@ -43,9 +43,7 @@ class DetectionReplayTests(unittest.TestCase):
         ]
         self.assertEqual(len({step.group_id for step in checkout}), 1)
         self.assertEqual(checkout[2].group_count, 3)
-        self.assertEqual(
-            checkout[2].cluster_services, ["checkout", "gateway", "payments"]
-        )
+        self.assertEqual(checkout[2].cluster_services, ["checkout", "gateway"])
         matching_gateway = next(
             step
             for step in self.steps
@@ -57,6 +55,21 @@ class DetectionReplayTests(unittest.TestCase):
         self.assertEqual(matching_gateway.cluster_id, checkout[2].cluster_id)
         self.assertEqual(
             normalize_message("HTTP 503 for order 123"), "http 503 for order <n>"
+        )
+
+    def test_info_and_warn_logs_remain_context_without_groups_or_candidates(
+        self,
+    ) -> None:
+        context_steps = [step for step in self.steps if step.log.level != "ERROR"]
+        self.assertTrue(context_steps)
+        self.assertTrue(any(step.log.level == "WARN" for step in context_steps))
+        for step in context_steps:
+            self.assertIsNone(step.group_id)
+            self.assertIsNone(step.cluster_id)
+            self.assertEqual(step.group_count, 0)
+            self.assertEqual(step.decision, "routine")
+        self.assertTrue(
+            all(step.log.level == "ERROR" for step in self.steps if step.group_id)
         )
 
     def test_candidates_match_labeled_cases_and_are_emitted_once(self) -> None:

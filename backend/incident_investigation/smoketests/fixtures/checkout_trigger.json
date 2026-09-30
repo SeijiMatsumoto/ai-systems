@@ -1,0 +1,9 @@
+{
+  "incident_id": "detected-cluster-0115-20260414141918",
+  "cluster_id": "cluster-0115",
+  "trigger_log_id": "logs-0133",
+  "service": "checkout",
+  "observed_at": "2026-04-14T14:19:18Z",
+  "window_start": "2026-04-14T14:00:00Z",
+  "window_end": "2026-04-14T14:19:18Z"
+}

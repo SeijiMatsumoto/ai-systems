@@ -63,7 +63,7 @@ def verify_report(
     records: dict[str, Record] = {
         record.evidence_id: record
         for record in [
-            store.manifest.alert,
+            *([store.manifest.alert] if store.manifest.alert is not None else []),
             *store.logs,
             *store.metrics,
             *store.spans,

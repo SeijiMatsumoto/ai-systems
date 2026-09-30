@@ -17,6 +17,16 @@ class InvestigationRequest(BaseModel):
     window_end: datetime
 
 
+class DetectedIncident(BaseModel):
+    incident_id: str
+    cluster_id: str
+    trigger_log_id: str
+    service: str
+    observed_at: datetime
+    window_start: datetime
+    window_end: datetime
+
+
 class TelemetryEvidence(BaseModel):
     evidence_id: str
     source: Literal["log", "metric", "trace", "change", "alert"]
@@ -61,7 +71,16 @@ class VerificationResult(BaseModel):
 
 class WorkflowStep(BaseModel):
     sequence: int
-    stage: Literal["scope", "registry", "agent", "tool", "verification"]
+    stage: Literal[
+        "replay",
+        "guardrail",
+        "classifier",
+        "scope",
+        "registry",
+        "agent",
+        "tool",
+        "verification",
+    ]
     status: Literal["completed", "failed", "running"]
     summary: str
     details: dict[str, Any]

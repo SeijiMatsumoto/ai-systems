@@ -28,9 +28,10 @@ class ReplayStep(BaseModel):
     sequence: int
     log: LogEvent
     signature: str
-    group_id: str
+    group_id: str | None
     group_count: int
     cluster_id: str | None
+    cluster_group_ids: list[str]
     cluster_services: list[str]
     distinct_error_requests: int
     decision: Literal["routine", "below_threshold", "candidate", "duplicate_candidate"]
@@ -89,6 +90,22 @@ def replay_logs(store: TelemetryStore | None = None) -> Iterator[ReplayStep]:
         return cluster_id
 
     for sequence, log in enumerate(logs, start=1):
+        if log.level != "ERROR":
+            yield ReplayStep(
+                sequence=sequence,
+                log=log,
+                signature="",
+                group_id=None,
+                group_count=0,
+                cluster_id=None,
+                cluster_group_ids=[],
+                cluster_services=[],
+                distinct_error_requests=0,
+                decision="routine",
+                reason="Non-error log retained as context; excluded from incident grouping.",
+            )
+            continue
+
         signature = normalize_message(log.message)
         key = (log.service, log.level, signature)
         group = groups.get(key)
@@ -103,21 +120,6 @@ def replay_logs(store: TelemetryStore | None = None) -> Iterator[ReplayStep]:
             groups[key] = group
         group.last_seen = log.observed_at
         group.count += 1
-
-        if log.level not in {"WARN", "ERROR"}:
-            yield ReplayStep(
-                sequence=sequence,
-                log=log,
-                signature=signature,
-                group_id=group.id,
-                group_count=group.count,
-                cluster_id=None,
-                cluster_services=[],
-                distinct_error_requests=0,
-                decision="routine",
-                reason="Informational log; grouped for display, not incident candidacy.",
-            )
-            continue
 
         related_services = set(store.manifest.related_services[log.service])
         possible = set()
@@ -161,8 +163,7 @@ def replay_logs(store: TelemetryStore | None = None) -> Iterator[ReplayStep]:
         distinct_errors = {
             _request_key(record)
             for record in cluster.records
-            if record.level == "ERROR"
-            and window_start <= record.observed_at <= log.observed_at
+            if window_start <= record.observed_at <= log.observed_at
         }
         if len(distinct_errors) < MIN_ERROR_REQUESTS:
             decision = "below_threshold"
@@ -184,6 +185,7 @@ def replay_logs(store: TelemetryStore | None = None) -> Iterator[ReplayStep]:
             group_id=group.id,
             group_count=group.count,
             cluster_id=cluster_id,
+            cluster_group_ids=sorted(cluster.group_ids),
             cluster_services=sorted({record.service for record in cluster.records}),
             distinct_error_requests=len(distinct_errors),
             decision=decision,

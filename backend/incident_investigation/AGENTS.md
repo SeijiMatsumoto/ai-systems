@@ -31,19 +31,60 @@ Keep each phase uncommitted until user review, then request approval before movi
 | Phase | Outcome | Status |
 | --- | --- | --- |
 | 1. Stream and group | Versioned replay fixture, signature groups, cross-service correlation, deterministic candidate rules | Reviewed and committed |
-| 2. Classify and trigger | Jev judgment, application gate, detected incident, snapshot-scoped investigator | Awaiting detailed plan and approval |
-| 3. UI and scenario checks | Replay controls and end-to-end harness trace with labeled scenarios | Awaiting detailed plan and approval |
+| 2. Classify and trigger | Jev judgment, application gate, detected incident, snapshot-scoped investigator | Reviewed; commit blocked by workspace Git write restriction |
+| 3. UI and scenario checks | Replay controls and end-to-end harness trace with labeled scenarios | Implemented; awaiting user review |
 
 Phase 1 adds `fixtures/v2/`, `detection.py`, and `replay_cli.py`. The new
 fixture derives from v1 and adds a short email retry burst plus an inventory
 cache fallback that meets candidate rules but is labeled nonincident. The
 deterministic replay emits one JSON step per log and two candidate groups.
 Its labels are kept in `expected_detection.json`, outside replayed telemetry.
-No Jev call, auto-trigger, API change, or frontend change exists yet. The
-committed alert-first UI still runs against v1 until later phases replace it.
+Phase 2 adds a TypeSafe Jev adapter with a Logfire span for each call, provisional
+probability gates, one top-level simulation run, backend response and SSE routes,
+and trigger-time snapshots for the existing investigator. Simulations default to
+one report and accept a bounded `max_reports` value of 1–3; a process-local gate
+serializes investigator runs across both simulation and old alert routes. Phase 3
+should expose the report cap with a UI control defaulting to 1 and explain that
+it changes reports per replay, while the backend still runs one investigator at
+a time. Offline tests use fake Jev and Pydantic AI responses. Phase 3 switches
+the frontend to the replay route and exposes the key workflow decisions.
 
 ## Current implementation
 
-As of 2026-09-29, `fixtures/v1/` and `telemetry.py` provide synthetic telemetry and four scoped Python queries. `agent.py` and `service.py` provide a bounded investigator using `backend/db/llm_runs.py`. `verification.py` constructs a cited report or structured failures, and `api.py` exposes both a final-response route and a streaming workflow-step route. `frontend/src/IncidentWorkspace.tsx` submits the synthetic alert and renders live scope, registry, agent, tool, and verification steps, followed by the report, cited evidence, coverage gaps, failure state, and engineer-review requirement. Report and workflow steps remain response-only. Offline fake-model tests cover the agent, trace, and report checks; the frontend build and lint plus local mocked API preview cover the UI. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.
+As of 2026-09-29, `fixtures/v2/` and `detection.py` replay all logs but group only errors;
+`classifier.py` judges candidates with Jev; and `simulation.py` invokes a
+trigger-time, snapshot-scoped investigator. `api.py` exposes final and SSE
+simulation routes. `frontend/src/IncidentWorkspace.tsx` starts a paced replay,
+controls the report cap, and splits execution from output into Run and Result
+tabs. Run shows five expandable stages: group membership, candidate gate decisions,
+Jev inputs and judgments, the agent tool loop, and verification and persistence.
+The user removed the separate log, classifier,
+complete execution record, and duplicate tool-step panels; the full workflow
+payload remains saved in the database. Result opens on completion and shows reports,
+citations, coverage gaps, and engineer-review state. Selected simulations use
+`/incident-investigation/:runId?tab=run|result` so a reload or shared URL
+restores the result and selected tab.
+`smoketests/` contains separate CLI scripts for the two Jev candidate calls and
+for the investigator's first query and final draft model requests. Each script
+uses pinned input and checks one model response; neither investigator script runs
+the full agent loop or writes to Neon. The earlier combined `smoke.py` was removed.
+On 2026-09-29, all four named scripts were run against their real providers:
+checkout classified as incident, inventory landed in the safe `needs_review`
+band, the first investigator response chose one scoped `search_logs` call, and
+the draft response passed citation verification. The scripts are paid checks and
+remain outside routine test discovery. Keep the inventory calibration result
+visible instead of calling it `not_incident`.
+The Run view displays only ERROR replay records that entered grouping and candidate
+evaluation; backend replay and saved workflow still retain the full fixture.
+The frontend allocates a UUID on click, selects it in the saved-run control, and
+passes it to the simulation stream; the backend uses that UUID for `llm_runs` and
+the saved output. A prominent current-task line follows the latest streamed stage.
+The collapsible React Flow diagram shows component boundaries.
+Simulation reports and workflow steps are saved in `incident_simulation_outputs`
+and can be reopened from the frontend. Migration 005 was applied to this
+checkout's configured Neon database on 2026-09-29. The older v1 alert API is
+still runnable but is no longer the frontend entry point. Update this section
+and the phase table after each approved phase. Do not describe an unimplemented
+phase as runnable.
 
 Follow-up after incident work: connect `backend/research_workflow/` to `llm_runs` so its existing research runs can be found in the shared registry. Preserve research-specific payloads and behavior during that migration.

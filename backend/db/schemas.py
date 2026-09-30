@@ -5,8 +5,8 @@ from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
-    CheckConstraint,
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -60,7 +60,11 @@ class LlmRun(Base):
     )
     system_key: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="pending", server_default="pending", index=True
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
     )
     logfire_trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -68,6 +72,25 @@ class LlmRun(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IncidentSimulationOutput(Base):
+    """Saved response and workflow trace for one incident simulation."""
+
+    __tablename__ = "incident_simulation_outputs"
+    __table_args__ = (Index("ix_incident_simulation_outputs_created_at", "created_at"),)
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("llm_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    response_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class Document(Base):
@@ -169,9 +192,7 @@ class ResearchRun(Base):
         JSONB, nullable=False, default=dict
     )
     error_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    checkpoint_stage: Mapped[str | None] = mapped_column(
-        String(50), nullable=True
-    )
+    checkpoint_stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
     checkpoint_payload: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True
     )

@@ -200,7 +200,7 @@ export interface IncidentToolStep {
 
 export interface IncidentWorkflowStep {
   sequence: number
-  stage: 'scope' | 'registry' | 'agent' | 'tool' | 'verification'
+  stage: 'replay' | 'guardrail' | 'classifier' | 'scope' | 'registry' | 'agent' | 'tool' | 'verification'
   status: 'completed' | 'failed' | 'running'
   summary: string
   details: Record<string, unknown>
@@ -218,4 +218,61 @@ export interface InvestigationResult {
   logfire_trace_id: string | null
   usage: Record<string, unknown>
   error_type: string | null
+}
+
+export interface DetectedIncident {
+  incident_id: string
+  cluster_id: string
+  trigger_log_id: string
+  service: string
+  observed_at: string
+  window_start: string
+  window_end: string
+}
+
+export interface IncidentCandidateSummary {
+  cluster_id: string
+  trigger_log_id: string
+  trigger_service: string
+  observed_at: string
+  services: string[]
+  distinct_error_requests_last_5m: number
+  log_levels: Record<string, number>
+  representative_messages: string[]
+  log_evidence_ids: string[]
+  latest_error_rates: Record<string, number>
+  metric_evidence_ids: string[]
+}
+
+export interface IncidentClassification {
+  summary: IncidentCandidateSummary
+  outcome: 'incident' | 'not_incident' | 'needs_review' | 'classifier_unavailable'
+  judgment: {
+    model: string
+    question_version: number
+    probability: number
+    usage: Record<string, number>
+  } | null
+  error_type: string | null
+}
+
+export interface IncidentSimulationResult {
+  run_id: string
+  status: 'completed' | 'failed'
+  stop_reason: string
+  max_reports: number
+  classifications: IncidentClassification[]
+  detected_incidents: DetectedIncident[]
+  investigations: InvestigationResult[]
+  workflow_steps: IncidentWorkflowStep[]
+  logfire_trace_id: string | null
+  error_type: string | null
+}
+
+export interface IncidentSimulationSummary {
+  run_id: string
+  status: 'completed' | 'failed'
+  stop_reason: string
+  report_count: number
+  created_at: string
 }

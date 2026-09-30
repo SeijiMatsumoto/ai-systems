@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 os.environ["LOGFIRE_SEND_TO_LOGFIRE"] = "false"
 
 from backend.db.schemas import LlmRun
+from backend.incident_investigation.agent import agent
 from backend.incident_investigation.contracts import InvestigationRequest
 from backend.incident_investigation.service import run_investigation
 from backend.main import app
@@ -234,11 +235,11 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(outcome.tool_steps), 4)
         self.assertEqual(streamed_steps, outcome.workflow_steps)
         self.assertEqual(
-            [step.stage for step in outcome.workflow_steps[:4]],
-            ["scope", "registry", "registry", "agent"],
+            [step.stage for step in outcome.workflow_steps[:5]],
+            ["guardrail", "scope", "registry", "registry", "agent"],
         )
         self.assertEqual(
-            [step.stage for step in outcome.workflow_steps[4:12]],
+            [step.stage for step in outcome.workflow_steps[5:13]],
             ["agent", "tool"] * 4,
         )
         self.assertEqual(
@@ -246,7 +247,7 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
             ["agent", "verification", "registry"],
         )
         self.assertEqual(
-            outcome.workflow_steps[5].details["result"]["records"],
+            outcome.workflow_steps[6].details["result"]["records"],
             tool_results[0]["records"],
         )
         self.assertEqual(outcome.workflow_steps[-1].details["status"], "completed")
@@ -366,6 +367,14 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.stop_reason, "budget_exhausted")
         self.assertLessEqual(len(outcome.tool_steps), 9)
+        self.assertEqual(agent.model_settings["parallel_tool_calls"], False)
+        failure = next(
+            step
+            for step in outcome.workflow_steps
+            if step.stage == "agent" and step.status == "failed"
+        )
+        self.assertIn("limit", failure.details["failure_detail"])
+        self.assertGreater(failure.details["usage"]["tool_calls"], 0)
         with Session(self.engine) as session:
             self.assertEqual(session.get(LlmRun, outcome.run_id).status, "failed")
 

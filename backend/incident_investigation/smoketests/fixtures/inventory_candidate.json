@@ -1,0 +1,13 @@
+{
+  "cluster_id": "cluster-0273",
+  "trigger_log_id": "logs-0448",
+  "trigger_service": "inventory",
+  "observed_at": "2026-04-14T14:36:31Z",
+  "services": ["inventory"],
+  "distinct_error_requests_last_5m": 3,
+  "log_levels": {"ERROR": 3},
+  "representative_messages": ["Inventory cache refresh failed; stale cache served"],
+  "log_evidence_ids": ["logs-0446", "logs-0447", "logs-0448"],
+  "latest_error_rates": {"inventory": 0.001},
+  "metric_evidence_ids": ["metrics-0770"]
+}

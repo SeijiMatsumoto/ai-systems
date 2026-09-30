@@ -4,6 +4,8 @@ import type {
   BriefingRequest,
   InvestigationRequest,
   InvestigationResult,
+  IncidentSimulationResult,
+  IncidentSimulationSummary,
   IncidentWorkflowStep,
   ResearchRunDetail,
   ResearchRunSummary,
@@ -52,13 +54,14 @@ export function runIncident(
   })
 }
 
-export async function streamIncident(
-  request: InvestigationRequest,
+async function streamIncidentWorkflow<T>(
+  path: string,
+  request: Record<string, unknown>,
   onStep: (step: IncidentWorkflowStep) => void,
-): Promise<InvestigationResult> {
+): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}/agent/incident_investigation/stream`, {
+    response = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -78,7 +81,7 @@ export async function streamIncident(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let result: InvestigationResult | null = null
+  let result: T | null = null
 
   const handleFrame = (frame: string) => {
     const event = frame.split('\n').find((line) => line.startsWith('event: '))?.slice(7)
@@ -86,7 +89,7 @@ export async function streamIncident(
     if (!event || !data) return
     const payload: unknown = JSON.parse(data)
     if (event === 'step') onStep(payload as IncidentWorkflowStep)
-    if (event === 'result') result = payload as InvestigationResult
+    if (event === 'result') result = payload as T
     if (event === 'error') {
       const detail = payload && typeof payload === 'object' && 'detail' in payload
         ? String(payload.detail)
@@ -108,6 +111,37 @@ export async function streamIncident(
   }
   if (!result) throw new Error('Investigation stream ended without a result')
   return result
+}
+
+export function streamIncident(
+  request: InvestigationRequest,
+  onStep: (step: IncidentWorkflowStep) => void,
+): Promise<InvestigationResult> {
+  return streamIncidentWorkflow<InvestigationResult>(
+    '/agent/incident_investigation/stream',
+    { ...request },
+    onStep,
+  )
+}
+
+export function streamIncidentSimulation(
+  maxReports: number,
+  runId: string,
+  onStep: (step: IncidentWorkflowStep) => void,
+): Promise<IncidentSimulationResult> {
+  return streamIncidentWorkflow<IncidentSimulationResult>(
+    '/agent/incident_investigation/simulate/stream',
+    { run_id: runId, max_reports: maxReports, replay_delay_ms: 25 },
+    onStep,
+  )
+}
+
+export function getIncidentSimulations(limit = 10): Promise<IncidentSimulationSummary[]> {
+  return apiRequest(`/agent/incident_investigation/simulations?limit=${limit}`)
+}
+
+export function getIncidentSimulation(runId: string): Promise<IncidentSimulationResult> {
+  return apiRequest(`/agent/incident_investigation/simulations/${runId}`)
 }
 
 export function getResearchRun(runId: string): Promise<ResearchRunDetail> {

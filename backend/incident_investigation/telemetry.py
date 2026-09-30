@@ -236,6 +236,47 @@ class TelemetryStore:
             end=end_utc,
         )
 
+    def scope_for_detection(
+        self, incident_id: str, service: str, start: datetime, end: datetime
+    ) -> InvestigationScope:
+        if service not in self.manifest.related_services:
+            raise ValueError("unknown detected incident service")
+        start_utc = _utc(start, "query start")
+        end_utc = _utc(end, "query end")
+        fixture_start = _utc(self.manifest.window_start, "fixture start")
+        fixture_end = _utc(self.manifest.window_end, "fixture end")
+        if (
+            start_utc >= end_utc
+            or end_utc - start_utc > MAX_WINDOW
+            or start_utc < fixture_start
+            or end_utc > fixture_end
+        ):
+            raise ValueError("detected incident window is outside fixture bounds")
+        return InvestigationScope(
+            alert_id=incident_id,
+            allowed_services=frozenset(self.manifest.related_services[service]),
+            start=start_utc,
+            end=end_utc,
+        )
+
+    def snapshot(self, cutoff: datetime) -> TelemetryStore:
+        """Expose only records fully observed by the detection timestamp."""
+        observed = _utc(cutoff, "snapshot cutoff")
+        if not self.manifest.window_start <= observed <= self.manifest.window_end:
+            raise ValueError("snapshot cutoff is outside fixture bounds")
+        snapshot = object.__new__(TelemetryStore)
+        snapshot.fixture_dir = self.fixture_dir
+        snapshot.manifest = self.manifest
+        snapshot.logs = [item for item in self.logs if item.observed_at <= observed]
+        snapshot.metrics = [
+            item for item in self.metrics if item.observed_at <= observed
+        ]
+        snapshot.spans = [item for item in self.spans if item.ended_at <= observed]
+        snapshot.changes = [
+            item for item in self.changes if item.observed_at <= observed
+        ]
+        return snapshot
+
     def _window(
         self, scope: InvestigationScope, service: str, start: datetime, end: datetime
     ) -> tuple[datetime, datetime]:

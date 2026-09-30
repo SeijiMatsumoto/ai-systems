@@ -21,18 +21,18 @@ The user approved this overall sequence, not the implementation details of any p
 | 2B. Investigation loop | Bounded agent, tool steps, stop reason, and Logfire export | Reviewed and committed |
 | 3. Report and verification | Typed cited report, deterministic evidence checks, API response | Reviewed and committed |
 | 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Reviewed and committed |
-| 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Not planned in detail |
+| 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Reviewed and committed (`88dc4ec`); final review brief committed (`b3c9a17`) |
 
 ## Log-stream entry-point rework
 
-The user approved the rework overview and Phase 1 implementation on 2026-09-29.
-Keep each phase uncommitted until user review, then request approval before moving on.
+The rework is complete as an interview portfolio demo. Changes were reviewed
+before their commits to `main`.
 
 | Phase | Outcome | Status |
 | --- | --- | --- |
 | 1. Stream and group | Versioned replay fixture, signature groups, cross-service correlation, deterministic candidate rules | Reviewed and committed |
-| 2. Classify and trigger | Jev judgment, application gate, detected incident, snapshot-scoped investigator | Reviewed; commit blocked by workspace Git write restriction |
-| 3. UI and scenario checks | Replay controls and end-to-end harness trace with labeled scenarios | Implemented; awaiting user review |
+| 2. Classify and trigger | Jev judgment, application gate, detected incident, snapshot-scoped investigator | Reviewed and committed |
+| 3. UI and scenario checks | Replay controls, saved harness trace, labeled scenarios, component smoke tests, and engineer review | Reviewed and committed (`88dc4ec`, `b3c9a17`) |
 
 Phase 1 adds `fixtures/v2/`, `detection.py`, and `replay_cli.py`. The new
 fixture derives from v1 and adds a short email retry burst plus an inventory
@@ -43,11 +43,11 @@ Phase 2 adds a TypeSafe Jev adapter with a Logfire span for each call, provision
 probability gates, one top-level simulation run, backend response and SSE routes,
 and trigger-time snapshots for the existing investigator. Simulations default to
 one report and accept a bounded `max_reports` value of 1–3; a process-local gate
-serializes investigator runs across both simulation and old alert routes. Phase 3
-should expose the report cap with a UI control defaulting to 1 and explain that
-it changes reports per replay, while the backend still runs one investigator at
-a time. Offline tests use fake Jev and Pydantic AI responses. Phase 3 switches
-the frontend to the replay route and exposes the key workflow decisions.
+serializes investigator runs across both simulation and old alert routes. The UI
+exposes the report cap with a control defaulting to 1; it changes reports per
+replay, while the backend still runs one investigator at a time. Offline tests
+use fake Jev and Pydantic AI responses. The frontend uses the replay route and
+exposes the key workflow decisions.
 
 ## Current implementation
 
@@ -90,8 +90,10 @@ The collapsible React Flow diagram shows component boundaries.
 Simulation reports and workflow steps are saved in `incident_simulation_outputs`
 and can be reopened from the frontend. Migration 005 was applied to this
 checkout's configured Neon database on 2026-09-29. The older v1 alert API is
-still runnable but is no longer the frontend entry point. Update this section
-and the phase table after each approved phase. Do not describe an unimplemented
-phase as runnable.
+still runnable but is no longer the frontend entry point. The incident demo is
+complete for portfolio use. Its classifier thresholds have limited live
+calibration, report approval has no reviewer identity or authorization, and the
+report's cause remains a hypothesis until an engineer verifies it. Do not
+describe these demo boundaries as production guarantees.
 
 Follow-up after incident work: connect `backend/research_workflow/` to `llm_runs` so its existing research runs can be found in the shared registry. Preserve research-specific payloads and behavior during that migration.

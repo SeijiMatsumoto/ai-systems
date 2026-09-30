@@ -88,8 +88,19 @@ export interface ResearchWorkflowResult {
   verification: VerificationResult | null
 }
 
+export interface ResearchWorkflowStep {
+  run_id: string
+  sequence: number
+  stage: 'run' | 'scope' | 'classifier' | 'prefetch' | 'agent' | 'tool' | 'verification' | 'checkpoint' | 'persistence'
+  status: 'running' | 'completed' | 'failed' | 'skipped'
+  summary: string
+  details: Record<string, unknown>
+  recorded_at: string
+}
+
 export interface ResearchRunDetail {
   run_id: string
+  resumed_from_run_id: string | null
   symbol: string
   as_of: string
   status: ResearchRunStatus
@@ -108,6 +119,7 @@ export interface ResearchRunDetail {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  workflow_steps: ResearchWorkflowStep[]
 }
 
 export interface ResearchRunSummary {

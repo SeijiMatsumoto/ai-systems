@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { backfillCompany, getResearchRun, getResearchRuns, runResearch } from './api'
+import { backfillCompany, getResearchRun, getResearchRuns, streamResearch } from './api'
 import IncidentWorkspace from './IncidentWorkspace'
+import ResearchRunView from './ResearchRunView'
+import { researchTabFromUrl, withResearchRun } from './researchRunUi'
+import type { ResearchTab } from './researchRunUi'
 import type {
   BackfillRequest,
   BackfillResult,
@@ -11,6 +14,7 @@ import type {
   ResearchRunDetail,
   ResearchRunSummary,
   ResearchWorkflowResult,
+  ResearchWorkflowStep,
 } from './types'
 
 type WorkspaceMode = 'user' | 'admin'
@@ -403,22 +407,6 @@ function ResearchForm({
   )
 }
 
-function LoadingBriefing() {
-  return (
-    <div className="briefing-loading" aria-live="polite">
-      <div className="loading-heading">
-        <span className="loading-pulse" />
-        The workflow is researching, retrieving, and validating evidence.
-      </div>
-      <div className="skeleton skeleton-wide" />
-      <div className="skeleton" />
-      <div className="skeleton skeleton-short" />
-      <div className="skeleton-card" />
-      <div className="skeleton-card" />
-    </div>
-  )
-}
-
 function EvidenceDisclosure({ evidence }: { evidence: EvidenceItem }) {
   const isVersionTwo = 'evidence_id' in evidence
   const content = isVersionTwo
@@ -564,10 +552,10 @@ function BriefingView({
               <dd>{evidenceCount} references</dd>
             </div>
             <div>
-              <dt>Review status</dt>
+              <dt>Automated checks</dt>
               <dd className={approvalReady ? 'verified' : 'review-required'}>
                 <span aria-hidden="true" />
-                {approvalReady ? 'Verified' : 'Review required'}
+                {approvalReady ? 'Passed' : 'Needs review'}
               </dd>
             </div>
           </dl>
@@ -806,12 +794,14 @@ function RunHistory({
   runs,
   selectedRunId,
   loading,
+  error,
   onSelect,
   onNew,
 }: {
   runs: ResearchRunSummary[]
   selectedRunId: string | null
   loading: boolean
+  error: string | null
   onSelect: (runId: string) => void
   onNew: () => void
 }) {
@@ -824,7 +814,9 @@ function RunHistory({
         </div>
         <button onClick={onNew} type="button">New</button>
       </div>
-      {loading && runs.length === 0 ? (
+      {error && runs.length === 0 ? (
+        <div className="history-message">Could not load saved runs: {error}</div>
+      ) : loading && runs.length === 0 ? (
         <div className="history-message">Loading saved research…</div>
       ) : runs.length === 0 ? (
         <div className="history-message">Completed and failed runs will appear here.</div>
@@ -853,31 +845,42 @@ function RunHistory({
 
 function ResearchWorkspace() {
   const [mode, setMode] = useState<WorkspaceMode>('user')
+  const [activeTab, setActiveTab] = useState<ResearchTab>(() => researchTabFromUrl(new URL(window.location.href)))
   const [request, setRequest] = useState<BriefingRequest>(DEFAULT_RESEARCH_REQUEST)
   const [workflow, setWorkflow] = useState<ResearchWorkflowResult | null>(null)
   const [runDetail, setRunDetail] = useState<ResearchRunDetail | null>(null)
+  const [liveSteps, setLiveSteps] = useState<ResearchWorkflowStep[]>([])
+  const [currentRunId, setCurrentRunId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('run'))
   const [runHistory, setRunHistory] = useState<ResearchRunSummary[]>([])
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const selectionRequest = useRef(0)
 
-  const updateRunUrl = (runId: string | null) => {
-    const url = new URL(window.location.href)
-    if (runId) url.searchParams.set('run', runId)
-    else url.searchParams.delete('run')
-    window.history.pushState({}, '', url)
+  const updateRunUrl = (runId: string | null, tab: ResearchTab, replace = false) => {
+    const url = withResearchRun(new URL(window.location.href), runId, tab)
+    window.history[replace ? 'replaceState' : 'pushState']({}, '', url)
+  }
+
+  const selectTab = (tab: ResearchTab) => {
+    setActiveTab(tab)
+    updateRunUrl(currentRunId, tab)
   }
 
   const applyRunDetail = (savedRun: ResearchRunDetail) => {
     setRunDetail(savedRun)
     setWorkflow(workflowFromRun(savedRun))
+    setCurrentRunId(savedRun.run_id)
   }
 
   const pollRunUntilFinished = async (
     runId: string,
     initialRun?: ResearchRunDetail,
+    requestId = selectionRequest.current,
   ) => {
     let savedRun = initialRun ?? (await getResearchRun(runId))
+    if (requestId !== selectionRequest.current) throw new Error('Research selection changed')
 
     while (savedRun.status === 'pending' || savedRun.status === 'running') {
       applyRunDetail(savedRun)
@@ -888,6 +891,7 @@ function ResearchWorkspace() {
       }
       await delay(RUN_POLL_INTERVAL_MS)
       savedRun = await getResearchRun(runId)
+      if (requestId !== selectionRequest.current) throw new Error('Research selection changed')
     }
 
     applyRunDetail(savedRun)
@@ -898,33 +902,43 @@ function ResearchWorkspace() {
   }
 
   const showSavedRun = async (runId: string) => {
+    const requestId = ++selectionRequest.current
     setHistoryLoading(true)
     setError(null)
+    setLiveSteps([])
+    setCurrentRunId(runId)
     try {
       const savedRun = await getResearchRun(runId)
+      if (requestId !== selectionRequest.current) return
       applyRunDetail(savedRun)
       setRequest({
         ...savedRun.request_payload,
         as_of: localDateTimeFromIso(savedRun.request_payload.as_of),
       })
       if (savedRun.status === 'pending' || savedRun.status === 'running') {
+        setActiveTab('run')
         setLoading(true)
         await pollRunUntilFinished(runId, savedRun)
+        if (requestId !== selectionRequest.current) return
         await refreshHistory()
       }
     } catch (caught) {
+      if (requestId !== selectionRequest.current) return
       setError(caught instanceof Error ? caught.message : 'Could not load this run')
     } finally {
-      setLoading(false)
-      setHistoryLoading(false)
+      if (requestId === selectionRequest.current) {
+        setLoading(false)
+        setHistoryLoading(false)
+      }
     }
   }
 
   const refreshHistory = async () => {
     try {
       setRunHistory(await getResearchRuns())
+      setHistoryError(null)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not load run history')
+      setHistoryError(caught instanceof Error ? caught.message : 'Could not load run history')
     } finally {
       setHistoryLoading(false)
     }
@@ -937,10 +951,14 @@ function ResearchWorkspace() {
 
     const handleNavigation = () => {
       const runId = new URLSearchParams(window.location.search).get('run')
+      setActiveTab(researchTabFromUrl(new URL(window.location.href)))
       if (runId) void showSavedRun(runId)
       else {
+        ++selectionRequest.current
         setWorkflow(null)
         setRunDetail(null)
+        setLiveSteps([])
+        setCurrentRunId(null)
       }
     }
     window.addEventListener('popstate', handleNavigation)
@@ -948,25 +966,61 @@ function ResearchWorkspace() {
   }, [])
 
   const run = async () => {
+    const requestId = ++selectionRequest.current
+    let streamRunId: string | null = null
     setLoading(true)
     setError(null)
     setWorkflow(null)
     setRunDetail(null)
+    setLiveSteps([])
+    setCurrentRunId(null)
+    setActiveTab('run')
+    updateRunUrl(null, 'run')
     try {
       const normalizedRequest: BriefingRequest = {
         ...request,
         symbol: request.symbol.trim().toUpperCase(),
         as_of: new Date(request.as_of).toISOString(),
       }
-      const nextWorkflow = await runResearch(normalizedRequest)
+      const nextWorkflow = await streamResearch(normalizedRequest, (step) => {
+        if (requestId !== selectionRequest.current) return
+        if (!streamRunId) {
+          streamRunId = step.run_id
+          setCurrentRunId(step.run_id)
+          updateRunUrl(step.run_id, 'run', true)
+        }
+        if (streamRunId === step.run_id) setLiveSteps((previous) => [...previous, step])
+      })
+      if (requestId !== selectionRequest.current) return
+      if (streamRunId && nextWorkflow.run_id !== streamRunId) throw new Error('The backend returned a different research run ID.')
+      streamRunId = nextWorkflow.run_id
       setWorkflow(nextWorkflow)
-      updateRunUrl(nextWorkflow.run_id)
+      setCurrentRunId(nextWorkflow.run_id)
+      updateRunUrl(nextWorkflow.run_id, nextWorkflow.status === 'completed' ? 'briefing' : 'run', true)
       await pollRunUntilFinished(nextWorkflow.run_id)
+      if (requestId !== selectionRequest.current) return
+      setActiveTab('briefing')
       await refreshHistory()
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Research workflow failed')
+      if (requestId !== selectionRequest.current) return
+      if (streamRunId) {
+        try {
+          await pollRunUntilFinished(streamRunId)
+          if (requestId !== selectionRequest.current) return
+          setActiveTab('briefing')
+          updateRunUrl(streamRunId, 'briefing', true)
+          await refreshHistory()
+          return
+        } catch (recoveryError) {
+          if (requestId !== selectionRequest.current) return
+          setError(recoveryError instanceof Error ? recoveryError.message : 'Research workflow failed')
+        }
+      } else {
+        setError(caught instanceof Error ? caught.message : 'Research workflow failed')
+      }
+      setActiveTab('run')
     } finally {
-      setLoading(false)
+      if (requestId === selectionRequest.current) setLoading(false)
     }
   }
 
@@ -977,15 +1031,22 @@ function ResearchWorkspace() {
   )
 
   const selectSavedRun = (runId: string) => {
-    updateRunUrl(runId)
+    const tab: ResearchTab = runHistory.find((saved) => saved.run_id === runId)?.status === 'completed' ? 'briefing' : 'run'
+    setActiveTab(tab)
+    updateRunUrl(runId, tab)
     void showSavedRun(runId)
   }
 
   const startNewResearch = () => {
-    updateRunUrl(null)
+    ++selectionRequest.current
+    updateRunUrl(null, 'run')
     setWorkflow(null)
     setRunDetail(null)
+    setLiveSteps([])
+    setCurrentRunId(null)
+    setActiveTab('run')
     setError(null)
+    setLoading(false)
   }
 
   return (
@@ -1002,7 +1063,7 @@ function ResearchWorkspace() {
         </div>
         <div className="mode-switch" aria-label="Research workspace mode">
           <button className={mode === 'user' ? 'active' : ''} onClick={() => setMode('user')} type="button">
-            Briefing
+            Research
           </button>
           <button className={mode === 'admin' ? 'active' : ''} onClick={() => setMode('admin')} type="button">
             Admin
@@ -1021,28 +1082,25 @@ function ResearchWorkspace() {
             </div>
           )}
 
-          {loading && <LoadingBriefing />}
-          {!loading && !error && mode === 'user' && workflow && (
-            <BriefingView
-              result={workflow}
-              symbol={runDetail?.symbol ?? request.symbol}
-              asOf={runDetail?.as_of ?? request.as_of}
-              timeHorizon={request.time_horizon}
-            />
-          )}
-          {!loading && mode === 'user' && !workflow && !error && (
-            <div className="empty-state briefing-empty">
-              <span className="empty-index">05</span>
-              <strong>Ask a decision-useful question.</strong>
-              <p>The agent will retrieve evidence, produce a structured briefing, and verify every finding before returning it.</p>
+          {mode === 'user' && <>
+            <div className="research-tabs" role="tablist" aria-label="Research views">
+              <button type="button" role="tab" aria-selected={activeTab === 'run'} onClick={() => selectTab('run')}>Run <small>Workflow steps and decisions</small></button>
+              <button type="button" role="tab" aria-selected={activeTab === 'briefing'} disabled={!workflow?.briefing} onClick={() => selectTab('briefing')}>Briefing <small>Cited findings and limits</small></button>
             </div>
-          )}
+            <section role="tabpanel" aria-label="Research run" hidden={activeTab !== 'run'}>
+              <ResearchRunView steps={runDetail?.workflow_steps ?? liveSteps} runId={currentRunId} resumedFrom={runDetail?.resumed_from_run_id ?? null} loading={loading} status={runDetail?.status ?? workflow?.status ?? null} error={error} />
+            </section>
+            <section role="tabpanel" aria-label="Research briefing" hidden={activeTab !== 'briefing'}>
+              {workflow?.briefing && <BriefingView result={workflow} symbol={runDetail?.symbol ?? request.symbol} asOf={runDetail?.as_of ?? request.as_of} timeHorizon={request.time_horizon} />}
+            </section>
+          </>}
           {!loading && mode === 'admin' && <AdminView workflow={workflow} run={runDetail} />}
         </div>
         <RunHistory
           runs={runHistory}
-          selectedRunId={runDetail?.run_id ?? null}
+          selectedRunId={currentRunId}
           loading={historyLoading}
+          error={historyError}
           onSelect={selectSavedRun}
           onNew={startNewResearch}
         />

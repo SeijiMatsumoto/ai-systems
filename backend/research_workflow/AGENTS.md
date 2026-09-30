@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a runnable portfolio demo. Phases 1 and 2 were reviewed and committed. Phase 2 connects research attempts to `llm_runs`, saves ordered backend steps, and exposes a research SSE route. Migration 006 has not been applied to the configured database. The in-app walkthrough is the next phase and has not been implemented.
+This is a runnable portfolio demo. Phases 1, 2, and 3 were reviewed and committed. Phase 3 adds a Jev request judgment with an application gate and visible fallback, plus a live and saved in-app walkthrough with a system diagram. Migration 006 was applied to the configured database on 2026-09-30; all 15 older research rows have matching `llm_runs` rows.
 
 ## Contracts and boundaries
 
@@ -11,8 +11,9 @@ This is a runnable portfolio demo. Phases 1 and 2 were reviewed and committed. P
 - Apply the company and `as_of` scope in Python. Tavily publication timestamps are estimates and extracted pages are retrieved at run time, so historical availability is not proven by the provider response.
 - Do not cite mutable Yahoo snapshot metrics as historical evidence. Exclude daily close prices on the cutoff date. The current financial statement tool declines requests whose `as_of` is more than ten minutes old.
 - Preserve saved research-specific payloads and checkpoint behavior. The Phase 1 provider switch changes the request fingerprint through the tool version; existing saved runs remain readable.
-- Each new research attempt has the same UUID in `llm_runs` and `research_runs`. A failed checkpoint remains terminal; a resumed attempt gets a new UUID and `resumed_from_run_id`. Migration 006 backfills existing research rows before enforcing the foreign key. Apply it explicitly to existing databases only after this phase is reviewed.
+- Each new research attempt has the same UUID in `llm_runs` and `research_runs`. A failed checkpoint remains terminal; a resumed attempt gets a new UUID and `resumed_from_run_id`. Migration 006 backfills existing research rows before enforcing the foreign key. It has been applied to this checkout's configured database; other existing databases still need it applied explicitly.
 - `ResearchWorkflowStep` in `contracts.py` is the public step contract. Save each step in `research_run_steps` before sending it over SSE. Step details can contain tool arguments, results, and model-visible context; do not place private model reasoning in them.
+- `ResearchQueryJevJudgment` and `ResearchQueryGateDecision` also live in `contracts.py`. Jev supplies two typed yes/no probabilities; application thresholds make the accept/reject decision. An uncertain or unavailable Jev result invokes the existing query classifier, and both paths remain visible in the run steps. Do not describe the probability as proof that a request is safe.
 
 ## Phase 1 review gate
 
@@ -21,3 +22,7 @@ Offline verification covers contract validation, Tavily response filtering and p
 ## Phase 2 review gate
 
 Offline verification also covers shared/domain lifecycle linkage, a saved failed checkpoint, a new linked resume attempt, usage payloads, ordered steps, and SSE event order. Migration 006 was checked on a disposable local PostgreSQL database, including backfill and repeat application. These checks do not establish deployed behavior or the frontend walkthrough.
+
+## Phase 3 review gate
+
+Offline research tests cover Jev adapter shape and usage, threshold and fallback branches, early rejection before provider prefetch, and a fake-model workflow. Frontend build, lint, and tests cover stream parsing and run navigation. A local mock API demonstrated streaming steps, completed Briefing navigation, and saved Run restoration in the browser. Ruff checks pass on the changed Python files. No live Jev, Tavily, OpenAI, or full research run was called for this phase. The broader interview outline's durable worker queue, generalized planner, parallel subtasks, and human review action remain future design extensions rather than implemented features.

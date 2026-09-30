@@ -10,7 +10,9 @@ import type {
   ResearchRunDetail,
   ResearchRunSummary,
   ResearchWorkflowResult,
+  ResearchWorkflowStep,
 } from './types'
+import { readResearchStream } from './researchStream'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
@@ -43,6 +45,30 @@ export function runResearch(
     method: 'POST',
     body: JSON.stringify(request),
   })
+}
+
+export async function streamResearch(
+  request: BriefingRequest,
+  onStep: (step: ResearchWorkflowStep) => void,
+): Promise<ResearchWorkflowResult> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/agent/research_brief/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    })
+  } catch {
+    throw new Error(`Cannot reach the backend at ${API_BASE_URL}. Start ./run from backend/ and retry.`)
+  }
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null)
+    const detail = payload && typeof payload === 'object' && 'detail' in payload
+      ? String(payload.detail)
+      : `Research request failed with status ${response.status}`
+    throw new Error(detail)
+  }
+  return readResearchStream(response, onStep)
 }
 
 export function runIncident(

@@ -32,6 +32,14 @@ from backend.research_workflow.agent.evidence import (
     hydrate_briefing,
     load_evidence_catalog,
 )
+from backend.research_workflow.agent.jev_classifier import (
+    ACCEPT_PROBABILITY,
+    JEV_MODEL,
+    QUERY_GATE_VERSION,
+    REJECT_PROBABILITY,
+    classify_research_query,
+    decide_query_gate,
+)
 from backend.research_workflow.contracts import (
     BriefingRequest,
     DocumentEvidence,
@@ -40,6 +48,7 @@ from backend.research_workflow.contracts import (
     FinancialEvidence,
     Finding,
     GroundingFailure,
+    QueryClassification,
     ResearchBriefing,
     ResearchWorkflowResult,
     VerificationResult,
@@ -85,6 +94,7 @@ def create_fingerprint(request: BriefingRequest) -> str:
         "prompt_version": prompt_version,
         "tool_version": tool_version,
         "schema_version": schema_version,
+        "query_gate_version": QUERY_GATE_VERSION,
     }
     canonical_json = json.dumps(
         fingerprint_input,
@@ -266,7 +276,12 @@ async def run_research_workflow(
         entry = {"component": component, "usage": to_jsonable_python(usage)}
         usage_events.append(entry)
         if recorder is not None:
-            recorder.emit("agent", "completed", f"{component} usage recorded", entry)
+            stage = (
+                "classifier"
+                if component in {"query_jev", "query_classifier"}
+                else "agent"
+            )
+            recorder.emit(stage, "completed", f"{component} usage recorded", entry)
         if run_id is not None:
             with db_utils.get_session() as usage_session:
                 usage_run = usage_session.get(ResearchRun, run_id)
@@ -464,17 +479,77 @@ async def run_research_workflow(
                     "Classifying research request",
                     {"symbol": request.symbol, "question": request.research_question},
                 )
-                query_classification = await run_query_classifier(
-                    request.symbol,
-                    request.research_question,
-                    run_id,
-                    on_usage=record_usage,
+                recorder.emit(
+                    "classifier",
+                    "running",
+                    "Jev relevance and instruction judgments requested",
+                    {
+                        "model": JEV_MODEL,
+                        "query_gate_version": QUERY_GATE_VERSION,
+                        "accept_probability": ACCEPT_PROBABILITY,
+                        "reject_probability": REJECT_PROBABILITY,
+                        "state": {
+                            "symbol": request.symbol.strip().upper(),
+                            "research_question": request.research_question,
+                        },
+                    },
                 )
+                fallback_reason: str | None = None
+                query_classification: QueryClassification | None = None
+                try:
+                    judgment = await classify_research_query(
+                        request.symbol, request.research_question
+                    )
+                    decision = decide_query_gate(judgment)
+                    record_usage("query_jev", judgment.usage)
+                    recorder.emit(
+                        "classifier",
+                        "completed",
+                        "Jev query judgment and application gate recorded",
+                        decision.model_dump(mode="json"),
+                    )
+                    if decision.outcome == "fallback":
+                        fallback_reason = "uncertain_jev_judgment"
+                    else:
+                        query_classification = QueryClassification(
+                            is_relevant=decision.outcome == "accept",
+                            reasoning=decision.reason,
+                        )
+                except Exception as exc:  # noqa: BLE001 - route Jev failures to the bounded fallback
+                    fallback_reason = "jev_unavailable"
+                    recorder.emit(
+                        "classifier",
+                        "failed",
+                        "Jev query judgment unavailable",
+                        {"error_type": type(exc).__name__},
+                    )
+
+                if fallback_reason is not None:
+                    recorder.emit(
+                        "classifier",
+                        "running",
+                        "Existing query classifier handling fallback",
+                        {"fallback_reason": fallback_reason},
+                    )
+                    query_classification = await run_query_classifier(
+                        request.symbol,
+                        request.research_question,
+                        run_id,
+                        on_usage=record_usage,
+                    )
+                if query_classification is None:
+                    raise RuntimeError("Research query gate returned no decision")
                 recorder.emit(
                     "classifier",
                     "completed",
                     "Research request classified",
-                    query_classification.model_dump(mode="json"),
+                    {
+                        **query_classification.model_dump(mode="json"),
+                        "decided_by": "fallback_classifier"
+                        if fallback_reason
+                        else "jev_gate",
+                        "fallback_reason": fallback_reason,
+                    },
                 )
                 logger.info(
                     "query_classification_completed run_id=%s symbol=%s "
@@ -670,6 +745,19 @@ async def run_research_workflow(
                         (index, finding, valid_evidence, precheck_failure)
                     )
 
+            recorder.emit(
+                "verification",
+                "completed",
+                "Deterministic evidence provenance checked",
+                {
+                    "invalid_evidence_references": verification.invalid_evidence_references,
+                    "grounding_failures": [
+                        failure.model_dump(mode="json")
+                        for failure in verification.grounding_failures
+                    ],
+                    "eligible_finding_indexes": [item[0] for item in grounding_inputs],
+                },
+            )
             verified_findings: list[Finding] = []
             for index, finding, valid_evidence, precheck_failure in grounding_inputs:
                 failure_reason = precheck_failure
@@ -684,6 +772,10 @@ async def run_research_workflow(
                                 "statement": finding.statement,
                                 "evidence_ids": [
                                     item.evidence_id for item in valid_evidence
+                                ],
+                                "model_visible_evidence": [
+                                    item.model_dump(mode="json")
+                                    for item in valid_evidence
                                 ],
                             },
                         )
@@ -723,7 +815,18 @@ async def run_research_workflow(
                         "verification",
                         "running",
                         "Repairing rejected finding",
-                        {"finding_index": index, "failure_reason": failure_reason},
+                        {
+                            "finding_index": index,
+                            "failure_reason": failure_reason,
+                            "finding": finding.model_dump(mode="json"),
+                            "model_visible_evidence": [
+                                item.model_dump(mode="json") for item in valid_evidence
+                            ],
+                            "accepted_findings": [
+                                item.model_dump(mode="json")
+                                for item in verified_findings
+                            ],
+                        },
                     )
                     revision = await revise_finding(
                         finding,
@@ -849,7 +952,8 @@ async def run_research_workflow(
                     "Synthesizing checked findings",
                     {
                         "accepted_findings": [
-                            finding.statement for finding in verified_findings
+                            finding.model_dump(mode="json")
+                            for finding in verified_findings
                         ]
                     },
                 )
@@ -857,6 +961,12 @@ async def run_research_workflow(
                     verified_findings,
                     run_id,
                     on_usage=record_usage,
+                )
+                recorder.emit(
+                    "verification",
+                    "completed",
+                    "Narrative draft recorded",
+                    narrative.model_dump(mode="json"),
                 )
                 summary_check = await verify_finding(
                     Finding(
@@ -888,7 +998,9 @@ async def run_research_workflow(
                     "Narrative grounding checked",
                     {
                         "summary_supported": summary_check.is_supported,
+                        "summary_reason": summary_check.reasoning,
                         "outlook_supported": outlook_check.is_supported,
+                        "outlook_reason": outlook_check.reasoning,
                     },
                 )
                 briefing.executive_summary = (

@@ -19,6 +19,7 @@ from backend.research_workflow.contracts import (
     DraftResearchBriefing,
     GroundingClassification,
     QueryClassification,
+    ResearchQueryJevJudgment,
 )
 from backend.research_workflow.service import research
 from backend.research_workflow.service.run_record import saved_steps
@@ -73,6 +74,15 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
         async def classify(symbol, question, run_id, *, on_usage):
             on_usage("query_classifier", {"requests": 1, "input_tokens": 20})
             return QueryClassification(is_relevant=True, reasoning="Company research")
+
+        async def jev(symbol, question):
+            return ResearchQueryJevJudgment(
+                model="fake-jev",
+                question_version=1,
+                relevance_probability=0.5,
+                instruction_probability=0.1,
+                usage={"input_tokens": 100, "output_tokens": 2},
+            )
 
         async def agent(**kwargs):
             agent_calls.append(kwargs["run_id"])
@@ -159,6 +169,7 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ]
         with (
             patch.object(research, "run_query_classifier", classify),
+            patch.object(research, "classify_research_query", jev),
             patch.object(research, "run_research_briefing_agent", agent),
             patch.object(
                 research,
@@ -228,6 +239,63 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
         detail = get_research_run_detail(result.run_id)
         self.assertEqual(detail["resumed_from_run_id"], failed_id)
         self.assertEqual(len(detail["workflow_steps"]), len(new_steps))
+
+    async def test_jev_rejection_stops_before_provider_prefetch(self) -> None:
+        async def reject(symbol, question):
+            return ResearchQueryJevJudgment(
+                model="fake-jev",
+                question_version=1,
+                relevance_probability=0.1,
+                instruction_probability=0.01,
+                usage={"input_tokens": 20},
+            )
+
+        with (
+            patch.object(research, "classify_research_query", reject),
+            patch.object(research, "run_query_classifier") as fallback,
+            patch.object(research, "get_company_snapshot") as prefetch,
+            self.assertRaisesRegex(ValueError, "not relevant"),
+        ):
+            await research.run_research_workflow(self.request)
+        fallback.assert_not_called()
+        prefetch.assert_not_called()
+        with self.get_session() as session:
+            run = session.query(ResearchRun).one()
+            self.assertEqual(run.status, ResearchRunStatus.FAILED)
+            self.assertEqual(session.get(LlmRun, run.id).status, "failed")
+            steps = saved_steps(run.id)
+            self.assertTrue(
+                any(step.details.get("outcome") == "reject" for step in steps)
+            )
+
+    async def test_jev_unavailable_uses_visible_fallback(self) -> None:
+        async def unavailable(symbol, question):
+            raise TimeoutError("fake Jev timeout")
+
+        async def fallback(symbol, question, run_id, *, on_usage):
+            on_usage("query_classifier", {"requests": 1})
+            return QueryClassification(is_relevant=False, reasoning="Unrelated request")
+
+        with (
+            patch.object(research, "classify_research_query", unavailable),
+            patch.object(research, "run_query_classifier", fallback),
+            patch.object(research, "get_company_snapshot") as prefetch,
+            self.assertRaisesRegex(ValueError, "not relevant"),
+        ):
+            await research.run_research_workflow(self.request)
+        prefetch.assert_not_called()
+        with self.get_session() as session:
+            run = session.query(ResearchRun).one()
+            steps = saved_steps(run.id)
+            self.assertTrue(
+                any(
+                    step.details.get("fallback_reason") == "jev_unavailable"
+                    for step in steps
+                )
+            )
+            self.assertEqual(
+                run.usage_payload["calls"][0]["component"], "query_classifier"
+            )
 
 
 if __name__ == "__main__":

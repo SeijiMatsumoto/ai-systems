@@ -96,6 +96,20 @@ class QueryClassification(BaseModel):
     reasoning: str = Field(max_length=120)
 
 
+class ResearchQueryJevJudgment(BaseModel):
+    model: str
+    question_version: int
+    relevance_probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    instruction_probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    usage: dict[str, int]
+
+
+class ResearchQueryGateDecision(BaseModel):
+    outcome: Literal["accept", "reject", "fallback"]
+    reason: str
+    judgment: ResearchQueryJevJudgment
+
+
 class GroundingClassification(BaseModel):
     is_supported: bool
     reasoning: str

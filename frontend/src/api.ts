@@ -13,9 +13,29 @@ import type {
   ResearchWorkflowStep,
 } from './types'
 import { readResearchStream } from './researchStream'
+import type { DemoPersona, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview } from './types'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
+
+export function getKnowledgePersonas(): Promise<DemoPersona[]> {
+  return apiRequest('/agent/internal_knowledge_action/personas')
+}
+
+export function getKnowledgeIndexStatus(): Promise<KnowledgeIndexStatus> {
+  return apiRequest('/agent/internal_knowledge_action/index-status')
+}
+
+export function buildKnowledgeMockIndex(): Promise<KnowledgeIndexBuildReport> {
+  return apiRequest('/agent/internal_knowledge_action/index-fixture', { method: 'POST' })
+}
+
+export function previewKnowledgeRetrieval(personaId: string, question: string): Promise<KnowledgeRetrievalPreview> {
+  return apiRequest('/agent/internal_knowledge_action/retrieval-preview', {
+    method: 'POST',
+    body: JSON.stringify({ persona_id: personaId, question }),
+  })
+}
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {

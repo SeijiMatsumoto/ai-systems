@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react'
 
 const IncidentSystemDiagram = lazy(() => import('./IncidentSystemDiagram'))
 const ResearchSystemDiagram = lazy(() => import('./ResearchSystemDiagram'))
+const KnowledgeSystemDiagram = lazy(() => import('./KnowledgeSystemDiagram'))
 const PlannedSystemDiagram = lazy(() => import('./PlannedSystemDiagram'))
 
 export default function ArchitectureModal({ systemId, title, availability, onClose }: {
@@ -37,15 +38,15 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
       <div className="architecture-modal-frame">
         <header className="architecture-modal-header">
           <div>
-            <span className="section-kicker">System architecture · {availability === 'ready' ? 'Runnable demo' : 'Proposed design'}</span>
+            <span className="section-kicker">System architecture · {availability === 'ready' ? 'Runnable demo' : systemId === 'knowledge-action' ? 'Partial demo' : 'Proposed design'}</span>
             <h2 id="architecture-modal-title">{title}</h2>
           </div>
           <button className="architecture-modal-close" type="button" onClick={() => dialogRef.current?.close()} autoFocus aria-label="Close architecture diagram">×</button>
         </header>
         <div className="architecture-modal-body">
-          {availability === 'planned' && <p className="architecture-modal-note">This diagram shows the intended boundaries. The workflow is an architecture scaffold and is not runnable yet.</p>}
+          {availability === 'planned' && <p className="architecture-modal-note">{systemId === 'knowledge-action' ? 'Ingestion and retrieval preview run with mock embeddings. Answer synthesis and actions are proposed.' : 'This diagram shows the intended boundaries. The workflow is an architecture scaffold and is not runnable yet.'}</p>}
           <Suspense fallback={<p className="architecture-modal-note">Loading diagram…</p>}>
-            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}
+            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}
           </Suspense>
         </div>
       </div>

@@ -14,19 +14,6 @@ const designs: Record<string, { summary: string; main: Step[]; branch: Step; bra
     branchLabel: 'tool call', returnLabel: 'file + test result',
     note: 'The runtime owns file permissions and command limits; the model proposes edits but cannot expand its own scope.',
   },
-  'knowledge-action': {
-    summary: 'A proposed internal assistant filters documents by user access before retrieval, then separates cited answers from actions that require policy checks and approval.',
-    main: [
-      { category: 'REQUEST', title: 'User + question', detail: 'Identity and action intent' },
-      { category: 'ACCESS GATE', title: 'ACL filtering', detail: 'Allowed sources only', tone: 'gate' },
-      { category: 'MODEL · AGENT', title: 'Answer or propose', detail: 'Cite retrieved evidence', tone: 'model' },
-      { category: 'ACTION GATE', title: 'Policy + approval', detail: 'Authorize before execution', tone: 'gate' },
-      { category: 'OUTPUT', title: 'Answer / action state', detail: 'Citation or approval status', tone: 'output' },
-    ],
-    branch: { category: 'PERMITTED SOURCES', title: 'Docs + tickets', detail: 'Only ACL-filtered records' },
-    branchLabel: 'retrieve', returnLabel: 'cited records',
-    note: 'Unauthorized records never enter model context. An action proposal remains pending until a human approves it.',
-  },
   'customer-support': {
     summary: 'A proposed support agent reads policy and authoritative account state, checks ownership and eligibility, then answers, acts, or escalates.',
     main: [

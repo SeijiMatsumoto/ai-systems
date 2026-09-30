@@ -14,7 +14,7 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-Incident Investigation and Research & Workflow are runnable through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, a backend API, and an engineer-review workspace. Simulations save their responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID; the older alert-first route remains response-only. The other three directories hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+Incident Investigation and Research & Workflow are runnable through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, a backend API, and an engineer-review workspace. Simulations save their responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID; the older alert-first route remains response-only. Knowledge + Action has synthetic chunk ingestion and an ACL-scoped hybrid retrieval preview, but no answer agent or action workflow. Its default mock embeddings demonstrate the boundaries, not real semantic quality. Coding Agent and Customer Support hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
@@ -64,6 +64,7 @@ Use offline checks for ordinary code changes. **Do not run real LLM calls during
 
 ```sh
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/internal_knowledge_action/tests -v
 cd frontend && npm run build && npm run lint && npm test
 ```
 

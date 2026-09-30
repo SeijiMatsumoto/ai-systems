@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { backfillCompany, getResearchRun, getResearchRuns, streamResearch } from './api'
 import IncidentWorkspace from './IncidentWorkspace'
+import KnowledgeRetrievalPreview from './KnowledgeRetrievalPreview'
 import ArchitectureModal from './ArchitectureModal'
 import ResearchRunView from './ResearchRunView'
 import { citationKeyword, sourceCount, visibleResearchLimitations } from './researchReportUi'
@@ -76,7 +77,7 @@ const TOOLS: ToolDefinition[] = [
     category: 'Internal assistant',
     description: 'Answer across permitted sources and route proposed actions through approval.',
     availability: 'planned',
-    flow: ['User identity', 'ACL-aware retrieval', 'Cited answer', 'Action approval'],
+    flow: ['Ingest + index', 'User access gate', 'Hybrid retrieval', 'Answer + approval'],
     input: 'A synthetic employee question over mock documents and tickets, optionally requesting an action.',
     output: 'A cited answer and, when appropriate, an action proposal with an explicit approval state.',
     boundary: 'Access filtering happens before retrieval; a model cannot grant itself action permission.',
@@ -252,7 +253,7 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
         <h1>Five AI system designs. Two runnable demos.</h1>
         <p>
           Compare the request flow, model boundary, and output of common interview systems.
-          Investigate a synthetic incident or run cited company research. Three other systems remain architecture scaffolds.
+          Investigate a synthetic incident or run cited company research. Knowledge + Action has an ingestion and retrieval preview; its assistant and the other two systems remain scaffolds.
         </p>
       </div>
 
@@ -306,8 +307,11 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
         <div><span>Key boundary</span><p>{tool.boundary}</p></div>
         <div><span>First runnable slice</span><p>{tool.firstSlice}</p></div>
       </div>
+      {tool.id === 'knowledge-action' && <KnowledgeRetrievalPreview />}
       <p className="scaffold-note">
-        Architecture and proposed contracts only. No agent or API is connected yet.
+        {tool.id === 'knowledge-action'
+          ? 'The ingestion and retrieval preview is connected. Answer synthesis and actions are planned.'
+          : 'Architecture and proposed contracts only. No agent or API is connected yet.'}
         {' '}See <code>{tool.sourcePath}README.md</code> in the repository.
       </p>
     </section>

@@ -295,3 +295,61 @@ export interface IncidentSimulationSummary {
   report_count: number
   created_at: string
 }
+
+export interface DemoPersona {
+  persona_id: string
+  label: string
+  groups: string[]
+}
+
+export interface RankedKnowledgeExcerpt {
+  chunk_id: string
+  title: string
+  kind: string
+  excerpt: string
+  locator: { source_id: string; revision: string; start: number; end: number }
+  lexical_rank: number | null
+  vector_rank: number | null
+  rerank_score: number
+}
+
+export interface KnowledgeCandidateTrace {
+  chunk_id: string
+  source_id: string
+  rank: number
+  score: number
+}
+
+export interface KnowledgeIndexStatus {
+  ready: boolean
+  fixture_version: string
+  embedding_model: string | null
+  source_count: number
+  chunk_count: number
+}
+
+export interface KnowledgeIndexBuildReport {
+  fixture_version: string
+  embedding_model: string
+  added_sources: string[]
+  updated_sources: string[]
+  unchanged_sources: string[]
+  removed_sources: string[]
+  acl_only_sources: string[]
+  embedded_chunks: number
+  total_chunks: number
+}
+
+export interface KnowledgeRetrievalPreview {
+  fixture_version: string
+  embedding_model: string
+  persona_id: string
+  normalized_question: string
+  keyword_signals: string[]
+  authorized_source_ids: string[]
+  lexical_candidates: KnowledgeCandidateTrace[]
+  vector_candidates: KnowledgeCandidateTrace[]
+  ranked_excerpts: RankedKnowledgeExcerpt[]
+  steps: { stage: string; detail: string; source_ids: string[] }[]
+  stop_reason: 'retrieval_preview_only'
+}

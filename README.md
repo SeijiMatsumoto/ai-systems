@@ -6,11 +6,11 @@ This repository is an interview-oriented set of five common AI system designs. E
 | --- | --- | --- |
 | [Incident Investigation](backend/incident_investigation/README.md) | Bounded telemetry queries, evidence-backed hypotheses, engineer review | Runnable local demo |
 | [Coding Agent](backend/coding_agent/README.md) | Code-aware context, isolated edit/test loop, reviewable diff | Architecture scaffold |
-| [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware retrieval, cited answers, approval before actions | Architecture scaffold |
+| [Internal Knowledge + Action](backend/internal_knowledge_action/README.md) | ACL-aware hybrid retrieval, cited answers, approval before actions | Ingestion and retrieval preview; assistant scaffold |
 | [Customer Support](backend/customer_support/README.md) | Policy and account separation, action checks, escalation | Architecture scaffold |
 | [Research & Workflow](backend/research_workflow/README.md) | Jev request gate, autonomous source selection, cited findings, verification, saved walkthrough | Runnable local demo |
 
-Incident Investigation and Research & Workflow are runnable through the frontend after their database setup. Incident Investigation replays a synthetic multi-service log stream, groups repeated errors, classifies candidates with Jev, and conditionally runs a scoped investigator with citation checks. Its workspace streams every ordered harness step, including model context, tool inputs and outputs, verification, and run state. The updated incident code saves simulation responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID. The other three systems remain architecture scaffolds.
+Incident Investigation and Research & Workflow are runnable through the frontend after their database setup. Incident Investigation replays a synthetic multi-service log stream, groups repeated errors, classifies candidates with Jev, and conditionally runs a scoped investigator with citation checks. Its workspace streams every ordered harness step, including model context, tool inputs and outputs, verification, and run state. The updated incident code saves simulation responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID. Knowledge + Action has only synthetic ingestion and hybrid retrieval inspection; its assistant and actions remain scaffolds. Coding Agent and Customer Support remain architecture scaffolds.
 
 The incident workspace calls `POST /agent/incident_investigation/simulate/stream`. A simulation ID is created on click, appears immediately in `/incident-investigation/:runId?tab=run` and the Saved simulations selector, and is used by the backend's persisted run. The Run tab places the current task above five expandable stages: error replay and grouping (including group members), candidate gate (considered clusters and pass/fail decisions), Jev classification (inputs and judgments), agent investigation (tool choices and results), and verification and persistence. The Run view shows only the 55 `ERROR` logs that entered grouping and candidate evaluation; the backend still processes the full fixture and saves its complete workflow payload. Its Result tab opens on completion with a decision brief that surfaces the trigger, proposed cause, supporting evidence, and key uncertainty; the full report and source records expand beneath it. The engineer approval stage states what decision the reviewer is making. A reviewer can approve a verified report or request changes with a note; the decision is saved with the simulation and appears on reload. This is a demo review record without user identity or remediation. A selected completed simulation has a shareable `/incident-investigation/:runId?tab=run|result` URL that restores the saved result and selected tab on reload. The page-header System architecture button opens a large diagram modal. The report-limit slider defaults to one and allows up to three reports per replay; the backend still runs only one investigator at a time per process. The earlier alert-first route remains available as a backend API.
 
@@ -25,7 +25,7 @@ cd backend
 ./run
 ```
 
-Open `http://127.0.0.1:8000/docs`. The launcher uses the repo's `.venv`, loads `backend/.env`, and reloads on backend code changes. The ASGI app exposes the research API plus final-response and streaming incident routes. Calling an agent route normally uses its configured model; opening `/docs` does not.
+Open `http://127.0.0.1:8000/docs`. The launcher uses the repo's `.venv`, loads `backend/.env`, and reloads on backend code changes. The ASGI app exposes the research API, final-response and streaming incident routes, and the Knowledge + Action ingestion/retrieval preview. Calling a research or incident agent route normally uses its configured model. The knowledge UI's mock ingestion and query paths use a fake embedding provider; an explicitly built OpenAI index uses live query embeddings. Opening `/docs` makes no provider call.
 
 For a fresh clone on another machine, complete one-time setup from the repository root:
 
@@ -64,6 +64,7 @@ These checks use mocked providers and a local fake model for the incident agent.
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
 .venv/bin/python -m unittest discover -s backend/db/tests -v
 .venv/bin/python -m unittest discover -s backend/incident_investigation/tests -v
+.venv/bin/python -m unittest discover -s backend/internal_knowledge_action/tests -v
 cd frontend && npm run build && npm run lint && npm test
 ```
 

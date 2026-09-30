@@ -1,6 +1,6 @@
 # Internal Knowledge + Action work guide
 
-Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `21d5907`. Phase 2 was approved and implemented for review. Phase 3 remains provisional; approval of this roadmap does not approve its implementation.
+Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `21d5907`. Phase 2 was reviewed and committed as `c6196ce`. Phase 3 remains provisional; approval of this roadmap does not approve its implementation.
 
 ## Proposed direction
 
@@ -17,8 +17,8 @@ Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `2
 | Phase | Reviewable outcome | Status |
 | --- | --- | --- |
 | 1. Hybrid retrieval boundary | Versioned corpus, two demo personas, ingestion/upserts, embedded chunks, ACL-scoped lexical and vector retrieval, reranking, exact locators, retrieval eval | Reviewed and committed (`21d5907`) |
-| 2. Read-only cited answers | Bounded answer call, citation verification, saved run and steps, frontend walkthrough and answer | Implemented; uncommitted and awaiting review |
-| 3. Approval-gated mock action | Typed proposal, deterministic policy, explicit approval state, idempotent mock execution, UI and scenario checks | Provisional; detail reviewed after Phase 2 |
+| 2. Read-only cited answers | Bounded answer call, citation verification, saved run and steps, frontend walkthrough and answer | Reviewed and committed (`c6196ce`) |
+| 3. Approval-gated mock action | Typed proposal, deterministic policy, explicit approval state, idempotent mock execution, UI and scenario checks | Not implemented; requires its own plan and approval |
 
 ## Phase 1 plan for review
 
@@ -68,15 +68,15 @@ For “What happens to a customer refund request?”, Alex's scope is the time o
 - A fake answer provider and fake Jev decision exercise typed request/response shape, call budgets, reported usage, failure handling, and a complete multi-step stream. SQLite-backed tests exercise `llm_runs` transitions, saved steps, replay, and failure records. Frontend tests cover live and saved states, cited excerpts, and abstention. Run Ruff fix/format/check, backend tests, frontend build/lint/tests, and `git diff --check`.
 - No routine live model or embedding calls. Report mock-only coverage and separately request authorization for any bounded paid component smoke test before a live end-to-end run.
 
-**Review artifact:** a successful saved cited answer, a saved abstention/denial, the ordered step payloads, citation verification results, offline test evidence, and an uncommitted diff. Wait for review before Phase 3 planning.
+**Review artifact:** a successful saved cited answer, a saved abstention/denial, the ordered step payloads, citation verification results, offline test evidence, and the committed diff (`c6196ce`). Phase 2 review is complete.
 
 ### Phase 2 implementation review
 
 The answer service creates a shared `llm_runs` row and saves the final payload in `knowledge_answer_outputs` (migration 007). It loads one fixture/index snapshot, resolves server-owned ACL scope, uses the existing two authorized retrieval paths, and exposes at most three exact passages to one typed answer call. Citation IDs are checked against the selected catalog, source revision, exact offsets, and authorized source IDs before Jev judges claim support. The application accepts Jev probability at or above 0.8; rejected or unavailable judgments abstain. There is no repair call or action executor. The UI streams steps, displays cited excerpts and stop reasons, and reopens saved runs from the URL. The retrieval-only preview remains available.
 
-Migration 007 was applied to this checkout's configured demo database on 2026-09-30. An action-like synthetic request was run through the live UI and saved without any provider call; reload restored the abstention and walkthrough. Offline tests use fake answer and Jev providers, including a complete streamed answer, denied ACL scope, fabricated/stale citations, provider failure persistence, and the injection sentence as data. Live answer-model and Jev quality have not been verified. The synthetic persona selector is still not authentication, and the mock embedding index is not a real semantic-quality evaluation.
+Migration 007 was applied to this checkout's configured demo database on 2026-09-30. An action-like synthetic request was run through the live UI and saved without any provider call; reload restored the abstention and walkthrough. A live answer smoke for “How do I request time off?” (`14c7aef4-749f-4e3b-bbff-945b608ae1a5`) produced two cited claims, and both passed Jev support checks (0.91 and 0.94). This verifies one question path only; broad answer quality remains unverified. Offline tests use fake answer and Jev providers, including a complete streamed answer, denied ACL scope, fabricated/stale citations, provider failure persistence, and the injection sentence as data. The synthetic persona selector is still not authentication, and the mock embedding index is not a real semantic-quality evaluation.
 
-A saved live run for “How do I request time off?” (`29fa725c-0f0e-4bb6-8564-f7e1216b8806`) abstained because the top three isolated sentence chunks omitted the portal submission steps. Retrieval now expands each selected chunk to its exact surrounding paragraph when the paragraph is at most 600 characters; citation verification checks the original ranked chunk lies within the cited source span. The old run remains immutable. Offline regression checks confirm the model-visible passages contain the procedure; no live rerun has verified that the model will answer.
+A saved live run for “How do I request time off?” (`29fa725c-0f0e-4bb6-8564-f7e1216b8806`) abstained because the top three isolated sentence chunks omitted the portal submission steps. Retrieval now expands each selected chunk to its exact surrounding paragraph when the paragraph is at most 600 characters; citation verification checks the original ranked chunk lies within the cited source span. The old run remains immutable. The subsequent successful live smoke is recorded above; the fix is verified on one question only.
 
 ## Phase 3 acceptance target
 

@@ -206,6 +206,31 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result.ranked_excerpts[0].locator.source_id, "policy-leave-v1")
         self.assertEqual(result.ranked_excerpts[0].vector_rank, 1)
 
+    def test_ranked_chunk_includes_exact_procedural_paragraph(self) -> None:
+        result = preview_retrieval(
+            RetrievalPreviewRequest(
+                persona_id="alex", question="How do I request time off?"
+            ),
+            self.fixture,
+            self.index,
+            self.embedder,
+        )
+        body = self.fixture.sources[0].body
+        passages = [item.excerpt for item in result.ranked_excerpts]
+        self.assertTrue(
+            any(
+                "Before submitting, open the people portal" in item for item in passages
+            )
+        )
+        self.assertTrue(
+            any(
+                "Choose the dates, select the appropriate leave type" in item
+                for item in passages
+            )
+        )
+        for item in result.ranked_excerpts:
+            self.assertEqual(item.excerpt, body[item.locator.start : item.locator.end])
+
     def test_no_authorized_answer_and_injection_remains_data(self) -> None:
         denied = preview_retrieval(
             RetrievalPreviewRequest(

@@ -5,6 +5,7 @@ import IncidentWorkspace from './IncidentWorkspace'
 import KnowledgeRetrievalPreview from './KnowledgeRetrievalPreview'
 import ArchitectureModal from './ArchitectureModal'
 import ResearchRunView from './ResearchRunView'
+import { CitationTooltip, CitationTooltipProvider } from './components/CitationTooltip'
 import { citationKeyword, sourceCount, visibleResearchLimitations } from './researchReportUi'
 import { currentResearchRequest, researchSourceUse, researchTabFromUrl, withResearchRun } from './researchRunUi'
 import type { ResearchTab } from './researchRunUi'
@@ -75,13 +76,13 @@ const TOOLS: ToolDefinition[] = [
     title: 'Knowledge + Action',
     shortTitle: 'Knowledge',
     category: 'Internal assistant',
-    description: 'Answer across permitted sources and route proposed actions through approval.',
-    availability: 'planned',
-    flow: ['Ingest + index', 'User access gate', 'Hybrid retrieval', 'Answer + approval'],
-    input: 'A synthetic employee question over mock documents and tickets, optionally requesting an action.',
-    output: 'A cited answer and, when appropriate, an action proposal with an explicit approval state.',
-    boundary: 'Access filtering happens before retrieval; a model cannot grant itself action permission.',
-    firstSlice: 'Two users with different document access and one task-creation action that waits for approval.',
+    description: 'Answer questions from authorized synthetic documents with checked citations.',
+    availability: 'ready',
+    flow: ['Ingest + index', 'User access gate', 'Hybrid retrieval', 'Verified cited answer'],
+    input: 'A synthetic employee question over documents, a policy, and a support ticket.',
+    output: 'A cited read-only answer or explicit abstention with a saved workflow.',
+    boundary: 'ACL filtering precedes retrieval; citation provenance and Jev grounding precede final answers.',
+    firstSlice: 'Two demo personas with different source access. Action approval remains planned.',
     sourcePath: 'backend/internal_knowledge_action/',
   },
   {
@@ -239,7 +240,7 @@ function ToolRail({
       </nav>
       <div className="rail-footer">
         <span className="availability-dot ready" />
-        2 runnable · 3 architecture scaffolds
+        3 runnable · 2 architecture scaffolds
       </div>
     </aside>
   )
@@ -250,10 +251,10 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
     <section className="catalog-view">
       <div className="catalog-intro">
         <p className="section-kicker">Workbench</p>
-        <h1>Five AI system designs. Two runnable demos.</h1>
+        <h1>Five AI system designs. Three runnable demos.</h1>
         <p>
           Compare the request flow, model boundary, and output of common interview systems.
-          Investigate a synthetic incident or run cited company research. Knowledge + Action has an ingestion and retrieval preview; its assistant and the other two systems remain scaffolds.
+          Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Action approval, Coding Agent, and Customer Support remain planned.
         </p>
       </div>
 
@@ -286,13 +287,13 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
     <section className="scaffold-view">
       <div className="scaffold-heading">
         <span className="scaffold-number">{tool.number}</span>
-        <StatusPill status="Architecture scaffold" />
+        <StatusPill status={tool.id === 'knowledge-action' ? 'Read-only demo' : 'Architecture scaffold'} />
       </div>
       <p className="section-kicker">{tool.category}</p>
       <h1>{tool.title}</h1>
       <p className="scaffold-description">{tool.description}</p>
 
-      <div className="scaffold-flow" aria-label="Intended request flow">
+      <div className="scaffold-flow" aria-label={tool.id === 'knowledge-action' ? 'Implemented read-only request flow' : 'Intended request flow'}>
         {tool.flow?.map((step, index) => (
           <div className="scaffold-flow-step" key={step}>
             <span>{String(index + 1).padStart(2, '0')}</span>
@@ -310,7 +311,7 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
       {tool.id === 'knowledge-action' && <KnowledgeRetrievalPreview />}
       <p className="scaffold-note">
         {tool.id === 'knowledge-action'
-          ? 'The ingestion and retrieval preview is connected. Answer synthesis and actions are planned.'
+          ? 'Ingestion, retrieval, cited answers, and saved walkthroughs run. Approval-gated actions remain planned.'
           : 'Architecture and proposed contracts only. No agent or API is connected yet.'}
         {' '}See <code>{tool.sourcePath}README.md</code> in the repository.
       </p>
@@ -405,23 +406,23 @@ function CitationChip({ evidence }: { evidence: EvidenceItem }) {
   const sourceLabel = isVersionTwo
     ? evidence.title
     : evidence.title || evidence.source
-  return (
-    <details className="citation-chip">
-      <summary>{citationKeyword(evidence)}</summary>
-      <div className="citation-tooltip">
-        <strong>{sourceLabel}</strong>
-        <blockquote>{typeof content === 'number' ? content.toLocaleString('en-US') : String(content)}</blockquote>
-        <div className="citation-tooltip-meta">
-          {'period_end' in evidence && evidence.period_end && <span>Period ended {formatDate(evidence.period_end)}</span>}
-          {evidence.published_at && <span>Published {formatDate(evidence.published_at)}</span>}
-          {'field_path' in evidence && evidence.field_path && <code>{evidence.field_path}</code>}
-          {'chunk_id' in evidence && evidence.chunk_id && <code>Chunk {evidence.chunk_id}</code>}
-          <code>{evidence.reference_id}</code>
-          {evidence.url && <a href={evidence.url} target="_blank" rel="noreferrer">Open source ↗</a>}
-        </div>
-      </div>
-    </details>
-  )
+  const metadata = [
+    ...('period_end' in evidence && evidence.period_end
+      ? [{ label: 'Period ended', value: formatDate(evidence.period_end) }]
+      : []),
+    ...(evidence.published_at
+      ? [{ label: 'Published', value: formatDate(evidence.published_at) }]
+      : []),
+    ...('field_path' in evidence && evidence.field_path
+      ? [{ value: evidence.field_path, code: true }]
+      : []),
+    ...('chunk_id' in evidence && evidence.chunk_id
+      ? [{ label: 'Chunk', value: evidence.chunk_id, code: true }]
+      : []),
+    { value: evidence.reference_id, code: true },
+    ...(evidence.url ? [{ value: 'Open source ↗', href: evidence.url }] : []),
+  ]
+  return <CitationTooltip label={citationKeyword(evidence)} sourceTitle={sourceLabel} excerpt={typeof content === 'number' ? content.toLocaleString('en-US') : String(content)} metadata={metadata} />
 }
 
 function confidenceLabel(confidence: number): string {
@@ -474,31 +475,6 @@ function BriefingView({
   timeHorizon: string
   steps: ResearchWorkflowStep[]
 }) {
-  useEffect(() => {
-    const closeOutside = (event: PointerEvent | FocusEvent) => {
-      const target = event.target
-      if (!(target instanceof Node)) return
-      document.querySelectorAll<HTMLDetailsElement>('.citation-chip[open]').forEach((chip) => {
-        if (!chip.contains(target)) chip.open = false
-      })
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      document.querySelectorAll<HTMLDetailsElement>('.citation-chip[open]').forEach((chip) => {
-        chip.open = false
-        if (chip.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
-      })
-    }
-    document.addEventListener('pointerdown', closeOutside)
-    document.addEventListener('focusin', closeOutside)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside)
-      document.removeEventListener('focusin', closeOutside)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [])
-
   if (!result.briefing) {
     return (
       <div className="empty-state">
@@ -1126,7 +1102,7 @@ export default function App() {
     url.pathname = tool?.id === 'incident-investigation' ? '/incident-investigation' : '/'
     if (tool && tool.id !== 'incident-investigation') url.searchParams.set('tool', tool.id)
     else url.searchParams.delete('tool')
-    if (!tool || tool.id !== 'research') url.searchParams.delete('run')
+    if (!tool || tool.id !== selectedTool?.id) url.searchParams.delete('run')
     if (tool?.id === 'incident-investigation') url.searchParams.set('tab', 'run')
     else url.searchParams.delete('tab')
     window.history.pushState({}, '', url)
@@ -1135,18 +1111,20 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
-      <AppHeader onHome={() => navigateToTool(null)} selectedTool={selectedTool} onArchitecture={() => setArchitectureOpen(true)} />
-      {selectedTool && architectureOpen && <ArchitectureModal systemId={selectedTool.id} title={selectedTool.title} availability={selectedTool.availability} onClose={() => setArchitectureOpen(false)} />}
-      <div className="app-frame">
-        <ToolRail selectedId={selectedTool?.id ?? null} onSelect={navigateToTool} />
-        <main className="workspace-canvas">
-          {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
-          {selectedTool?.id === 'incident-investigation' && <IncidentWorkspace />}
-          {selectedTool?.id === 'research' && <ResearchWorkspace />}
-          {selectedTool?.availability === 'planned' && <SystemScaffold tool={selectedTool} />}
-        </main>
+    <CitationTooltipProvider>
+      <div className="app-shell">
+        <AppHeader onHome={() => navigateToTool(null)} selectedTool={selectedTool} onArchitecture={() => setArchitectureOpen(true)} />
+        {selectedTool && architectureOpen && <ArchitectureModal systemId={selectedTool.id} title={selectedTool.title} availability={selectedTool.availability} onClose={() => setArchitectureOpen(false)} />}
+        <div className="app-frame">
+          <ToolRail selectedId={selectedTool?.id ?? null} onSelect={navigateToTool} />
+          <main className="workspace-canvas">
+            {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
+            {selectedTool?.id === 'incident-investigation' && <IncidentWorkspace />}
+            {selectedTool?.id === 'research' && <ResearchWorkspace />}
+            {(selectedTool?.availability === 'planned' || selectedTool?.id === 'knowledge-action') && <SystemScaffold tool={selectedTool} />}
+          </main>
+        </div>
       </div>
-    </div>
+    </CitationTooltipProvider>
   )
 }

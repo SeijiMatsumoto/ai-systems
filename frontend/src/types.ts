@@ -1,5 +1,46 @@
 export type ResearchRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
+export interface KnowledgeStep {
+  sequence: number
+  stage: string
+  status: 'running' | 'completed' | 'failed' | 'skipped'
+  summary: string
+  details: Record<string, unknown>
+}
+
+export interface KnowledgeEvidence {
+  evidence_id: string
+  chunk_id: string
+  title: string
+  excerpt: string
+  locator: { source_id: string; revision: string; start: number; end: number }
+}
+
+export interface KnowledgeAnswerResult {
+  run_id: string
+  status: 'completed' | 'failed'
+  stop_reason: string
+  request: { persona_id: string; question: string; run_id: string | null }
+  fixture_version: string | null
+  embedding_model: string | null
+  authorized_source_ids: string[]
+  evidence: KnowledgeEvidence[]
+  claims: Array<{ statement: string; evidence_ids: string[] }>
+  verification: Array<{ claim_index: number; passed: boolean; reason: string; judgment: { probability: number; model: string } | null }>
+  steps: KnowledgeStep[]
+  usage: Record<string, unknown>
+  error_type: string | null
+}
+
+export interface KnowledgeAnswerSummary {
+  run_id: string
+  status: 'completed' | 'failed'
+  stop_reason: string
+  persona_id: string
+  question: string
+  created_at: string
+}
+
 export interface BriefingRequest {
   symbol: string
   as_of: string

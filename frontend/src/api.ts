@@ -13,7 +13,8 @@ import type {
   ResearchWorkflowStep,
 } from './types'
 import { readResearchStream } from './researchStream'
-import type { DemoPersona, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview } from './types'
+import { readKnowledgeStream } from './knowledgeStream'
+import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
@@ -35,6 +36,32 @@ export function previewKnowledgeRetrieval(personaId: string, question: string): 
     method: 'POST',
     body: JSON.stringify({ persona_id: personaId, question }),
   })
+}
+
+export function getKnowledgeAnswers(limit = 10): Promise<KnowledgeAnswerSummary[]> {
+  return apiRequest(`/agent/internal_knowledge_action/answers?limit=${limit}`)
+}
+
+export function getKnowledgeAnswer(runId: string): Promise<KnowledgeAnswerResult> {
+  return apiRequest(`/agent/internal_knowledge_action/answers/${runId}`)
+}
+
+export async function streamKnowledgeAnswer(
+  personaId: string,
+  question: string,
+  runId: string,
+  onStep: (step: KnowledgeStep) => void,
+): Promise<KnowledgeAnswerResult> {
+  const response = await fetch(`${API_BASE_URL}/agent/internal_knowledge_action/answer-stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ persona_id: personaId, question, run_id: runId }),
+  })
+  if (!response.ok) {
+    const payload: { detail?: string } = await response.json().catch(() => ({}))
+    throw new Error(payload.detail ?? `Answer request failed with status ${response.status}`)
+  }
+  return readKnowledgeStream(response, onStep)
 }
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {

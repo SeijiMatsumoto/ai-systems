@@ -22,6 +22,7 @@ ACTION_WORDS = frozenset(
 )
 MAX_CANDIDATES = 8
 MAX_RESULTS = 3
+MAX_EXCERPT_CHARS = 600
 MIN_LEXICAL_TERMS = 2
 MIN_VECTOR_COSINE = (
     0.35  # Calibrated for the richer mock fixture; evaluate before using a real model.
@@ -51,6 +52,17 @@ def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     if not left_norm or not right_norm:
         return 0.0
     return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+
+
+def _excerpt_span(body: str, start: int, end: int) -> tuple[int, int]:
+    """Give a ranked chunk its surrounding paragraph when it fits the context cap."""
+    paragraph_start = body.rfind("\n\n", 0, start)
+    paragraph_start = 0 if paragraph_start < 0 else paragraph_start + 2
+    paragraph_end = body.find("\n\n", end)
+    paragraph_end = len(body) if paragraph_end < 0 else paragraph_end
+    if paragraph_end - paragraph_start > MAX_EXCERPT_CHARS:
+        return start, end
+    return paragraph_start, paragraph_end
 
 
 def _lexical_scores(question: str, chunks: list) -> dict[str, tuple[float, int]]:
@@ -117,6 +129,7 @@ def preview_retrieval(
     chunks = [chunk for chunk in index.chunks if chunk.source_id in allowed]
     chunk_by_id = {chunk.chunk_id: chunk for chunk in chunks}
     source_by_id = {source.source_id: source for source in authorized_sources}
+    fixture_sources = {source.source_id: source for source in fixture.sources}
 
     lexical_scores = _lexical_scores(normalized, chunks)
     lexical = sorted(
@@ -156,24 +169,29 @@ def preview_retrieval(
         combined.append((chunk_id, rerank))
     combined.sort(key=lambda item: (-item[1], item[0]))
     selected = combined[:MAX_RESULTS]
-    excerpts = [
-        RankedExcerpt(
-            chunk_id=chunk_id,
-            title=source_by_id[chunk_by_id[chunk_id].source_id].title,
-            kind=source_by_id[chunk_by_id[chunk_id].source_id].kind,
-            excerpt=chunk_by_id[chunk_id].text,
-            locator=SourceLocator(
-                source_id=chunk_by_id[chunk_id].source_id,
-                revision=source_by_id[chunk_by_id[chunk_id].source_id].revision,
-                start=chunk_by_id[chunk_id].start,
-                end=chunk_by_id[chunk_id].end,
-            ),
-            lexical_rank=lexical_rank.get(chunk_id),
-            vector_rank=vector_rank.get(chunk_id),
-            rerank_score=round(score, 5),
+    excerpts = []
+    for chunk_id, score in selected:
+        chunk = chunk_by_id[chunk_id]
+        source = source_by_id[chunk.source_id]
+        body = fixture_sources[chunk.source_id].body
+        start, end = _excerpt_span(body, chunk.start, chunk.end)
+        excerpts.append(
+            RankedExcerpt(
+                chunk_id=chunk_id,
+                title=source.title,
+                kind=source.kind,
+                excerpt=body[start:end],
+                locator=SourceLocator(
+                    source_id=chunk.source_id,
+                    revision=source.revision,
+                    start=start,
+                    end=end,
+                ),
+                lexical_rank=lexical_rank.get(chunk_id),
+                vector_rank=vector_rank.get(chunk_id),
+                rerank_score=round(score, 5),
+            )
         )
-        for chunk_id, score in selected
-    ]
 
     return RetrievalPreview(
         fixture_version=fixture.version,

@@ -10,6 +10,8 @@ Research & Workflow now creates a shared `llm_runs` row and a `research_runs` ro
 
 The Incident Investigation API creates and updates a shared run row. A simulation creates one top-level row even if no incident is found; a triggered investigation reuses that ID. `incident_simulation_outputs` stores the full simulation response, including classifier judgments, reports, and workflow steps, keyed by that ID. The table is defined in `schemas.py` and migration `migrations/005_create_incident_simulation_outputs.sql`. Apply migration 005 to other existing databases before running the updated simulation API; `create_all()` only covers a new database. Migration 005 was applied to this checkout's configured Neon database on 2026-09-29. The older alert-first route remains response-only.
 
+Internal Knowledge creates a shared run row for each read-only answer attempt. `knowledge_answer_outputs` stores the frozen authorized excerpts, ordered steps, verification decisions, usage, and final answer or abstention under the same ID. The table is defined in `schemas.py` and migration `migrations/007_create_knowledge_answer_outputs.sql`. Migration 007 was applied to this checkout's configured Neon database on 2026-09-30; other existing databases need it before saving knowledge answers.
+
 Offline test:
 
 ```sh

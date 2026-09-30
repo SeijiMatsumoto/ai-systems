@@ -93,6 +93,25 @@ class IncidentSimulationOutput(Base):
     )
 
 
+class KnowledgeAnswerOutput(Base):
+    """Saved answer, frozen evidence, and walkthrough for one knowledge run."""
+
+    __tablename__ = "knowledge_answer_outputs"
+    __table_args__ = (Index("ix_knowledge_answer_outputs_created_at", "created_at"),)
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("llm_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    response_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Document(Base):
     """Document-level table (Canonical metadata & source of truth)"""
 

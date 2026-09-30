@@ -1,0 +1,33 @@
+import type { KnowledgeAnswerResult, KnowledgeEvidence } from './types'
+
+export interface KnowledgeClaimView {
+  statement: string
+  citations: KnowledgeEvidence[]
+}
+
+export function presentKnowledgeAnswer(answer: KnowledgeAnswerResult) {
+  const status = answer.status === 'failed'
+    ? 'Run failed'
+    : answer.stop_reason === 'answered' ? 'Verified answer' : 'Abstained'
+  const title = answer.stop_reason === 'answered'
+    ? 'Answer'
+    : answer.stop_reason.replaceAll('_', ' ')
+  const messages: Record<string, string> = {
+    read_only_action_request: 'This read-only demo cannot perform an action.',
+    no_relevant_passage: 'No authorized passage matched this question.',
+    model_abstained: 'The answer model chose not to answer from the selected passages. Inspect the workflow to see what it received.',
+    citation_rejected: 'The draft cited a passage that failed provenance checks.',
+    grounding_rejected: 'The cited passage did not sufficiently support the claim.',
+    grounding_unavailable: 'The grounding check was unavailable, so the answer was withheld.',
+    answer_model_error: 'The answer model failed before a verified answer was available.',
+    retrieval_error: 'Retrieval could not complete for this run.',
+  }
+  const claims: KnowledgeClaimView[] = answer.claims.map((claim) => ({
+    statement: claim.statement,
+    citations: claim.evidence_ids.flatMap((id) => {
+      const evidence = answer.evidence.find((item) => item.evidence_id === id)
+      return evidence ? [evidence] : []
+    }),
+  }))
+  return { status, title, claims, message: messages[answer.stop_reason] ?? '' }
+}

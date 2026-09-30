@@ -613,7 +613,7 @@ pre,
 
 .knowledge-preview form {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(230px, 2fr) auto;
+  grid-template-columns: minmax(160px, 1fr) minmax(230px, 2fr) minmax(185px, auto);
   align-items: end;
   gap: 12px;
   margin-top: 24px;
@@ -652,6 +652,26 @@ pre,
 .knowledge-preview-source > div { display: flex; justify-content: space-between; gap: 12px; }
 .knowledge-preview-source span { color: var(--muted); font-size: 12px; }
 .knowledge-preview-source blockquote { margin: 10px 0; color: var(--ink); line-height: 1.5; }
+.knowledge-form-actions { display: grid; gap: 7px; }
+.knowledge-form-actions button { min-height: 39px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.knowledge-form-actions button:not(.primary-button) { border: 1px solid var(--line-strong); background: white; color: var(--ink); }
+.knowledge-form-actions button:disabled { opacity: .55; cursor: default; }
+.knowledge-history { margin-top: 20px; }
+.knowledge-answer-result { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--line); }
+.knowledge-answer-header h3 { margin: 6px 0 18px; font-size: 22px; text-transform: capitalize; }
+.knowledge-answer-header p:last-child { color: var(--muted); }
+.knowledge-answer-claim { padding: 14px 0 18px; }
+.knowledge-answer-claim > p { margin: 0; font-size: 16px; line-height: 1.7; }
+.knowledge-answer-citations { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 8px; vertical-align: baseline; }
+.knowledge-answer-walkthrough > summary { cursor: pointer; }
+.knowledge-answer-abstain { color: var(--muted); line-height: 1.5; }
+.knowledge-answer-walkthrough { margin-top: 18px; padding: 13px 0; border-top: 1px solid var(--line); }
+.knowledge-answer-walkthrough > summary { font-weight: 700; font-size: 13px; }
+.knowledge-answer-walkthrough ol { padding-left: 25px; }
+.knowledge-answer-walkthrough li { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.knowledge-answer-walkthrough li p { margin: 5px 0; color: var(--muted); font-size: 12px; }
+.knowledge-answer-walkthrough li details { margin-top: 7px; font-size: 11px; }
+.knowledge-answer-walkthrough pre { max-height: 250px; overflow: auto; padding: 10px; background: var(--canvas); font-size: 10px; }
 
 @media (max-width: 760px) {
   .knowledge-preview { padding: 18px; }

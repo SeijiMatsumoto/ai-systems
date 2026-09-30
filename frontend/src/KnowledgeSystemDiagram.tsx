@@ -34,13 +34,14 @@ export default function KnowledgeSystemDiagram() {
       <h3>{stage.label}</h3>
       <FlowRow nodes={stage.nodes} />
     </section>)}
-    <section className="knowledge-architecture-stage planned">
-      <h3>03 · Answer and action · planned</h3>
+    <section className="knowledge-architecture-stage">
+      <h3>03 · Cited answer · implemented</h3>
       <div className="knowledge-architecture-split">
-        <div><strong>Citable chunks → answer model → citation check → cited answer</strong><small>Read-only path; insufficient support leads to abstention.</small></div>
-        <div><strong>Action proposal → policy check → approval → mock executor</strong><small>Only the action path has side effects; approval is recorded before execution.</small></div>
+        <div><strong>Selected passages → bounded answer model → typed claims</strong><small>Only authorized, frozen excerpts reach the model. It may abstain.</small></div>
+        <div><strong>Citation provenance → Jev grounding → saved answer</strong><small>Deterministic checks run before Jev; rejected claims abstain.</small></div>
       </div>
     </section>
+    <section className="knowledge-architecture-stage planned"><h3>04 · Action · planned</h3><div className="knowledge-architecture-split"><div><strong>Action proposal → policy check → approval → mock executor</strong><small>Only a separately approved action path can have side effects.</small></div></div></section>
     <p className="knowledge-architecture-footnote">Both retrieval paths use the same ACL scope before candidate scoring. Mock embedding evals exercise the wiring; real-model retrieval quality remains unverified.</p>
   </div>
 }

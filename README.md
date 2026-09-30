@@ -69,7 +69,7 @@ cd frontend && npm run build && npm run lint && npm test
 
 The local environment used for the research demo is Python 3.13. Backend direct dependencies are listed in `backend/requirements.txt`; frontend dependencies are in `frontend/package-lock.json`.
 
-The shared [`llm_runs` schema](backend/db/README.md) holds cross-system run IDs, lifecycle state, and an optional Logfire trace ID. The local incident investigator uses it for ID and state, and saves its trace ID when Logfire export is enabled. Research & Workflow integration with `llm_runs` remains follow-up work.
+The shared [`llm_runs` schema](backend/db/README.md) holds cross-system run IDs, lifecycle state, and an optional Logfire trace ID. Incident Investigation and Research & Workflow use it for run identity and state. Research now saves ordered backend workflow steps and exposes them through an API and SSE stream; the research frontend walkthrough remains follow-up work. Migration 006 is required for existing databases and has not been applied to this checkout's configured database.
 
 ## Scope
 

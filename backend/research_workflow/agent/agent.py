@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -53,6 +53,7 @@ class MyDeps:
     financial_sources: dict[str, object]
     company_name: str | None = None
     web_results: dict[str, WebSearchResult] = field(default_factory=dict)
+    on_event: Callable[[str, str, str, dict[str, object]], object] | None = None
     _catalog_lock: threading.Lock = field(
         default_factory=threading.Lock,
         repr=False,
@@ -75,6 +76,19 @@ class MyDeps:
     def register_web_results(self, results: list[WebSearchResult]) -> None:
         with self._catalog_lock:
             self.web_results.update({result.result_id: result for result in results})
+
+    def tool_event(
+        self,
+        tool_name: str,
+        status: str,
+        inputs: dict[str, object],
+        result: dict[str, object] | None = None,
+    ) -> None:
+        if self.on_event is not None:
+            details: dict[str, object] = {"tool_name": tool_name, "arguments": inputs}
+            if result is not None:
+                details["result"] = result
+            self.on_event("tool", status, f"{tool_name} {status}", details)
 
 
 @dataclass
@@ -213,6 +227,8 @@ before external use.
 @agent.tool
 def search_documents(ctx: RunContext[MyDeps], inputs: SearchDocumentsInput):
     """Retrieve cited passage candidates from filings, articles, or generic documents."""
+    arguments = inputs.model_dump(mode="json")
+    ctx.deps.tool_event("search_documents", "running", arguments)
     chunks = retrieve_document_by_distance(
         query=inputs.query,
         symbol=ctx.deps.symbol,
@@ -228,24 +244,30 @@ def search_documents(ctx: RunContext[MyDeps], inputs: SearchDocumentsInput):
         max_candidates=inputs.top_n,
     )
     ctx.deps.register_evidence(list(candidates))
-    return {
+    output = {
         "search": inputs.model_dump(mode="json"),
         "evidence_candidates": [
             compact_document_evidence(candidate) for candidate in candidates
         ],
     }
+    ctx.deps.tool_event("search_documents", "completed", arguments, output)
+    return output
 
 
 @agent.tool
 def historical_financials(ctx: RunContext[MyDeps], inputs: FetchFinancialsInput):
     """Retrieve a bounded set of historical financial metrics and evidence IDs."""
+    arguments = inputs.model_dump(mode="json")
+    ctx.deps.tool_event("historical_financials", "running", arguments)
     if datetime.now(timezone.utc) - ctx.deps.as_of.astimezone(timezone.utc) > timedelta(
         minutes=10
     ):
-        return {
+        output = {
             "error": "Current Yahoo statement views cannot establish availability at a historical as_of instant",
             "as_of": ctx.deps.as_of.isoformat(),
         }
+        ctx.deps.tool_event("historical_financials", "completed", arguments, output)
+        return output
     symbol = ctx.deps.symbol
     reference_id = (
         f"historical_financials:{symbol}:"
@@ -316,7 +338,7 @@ def historical_financials(ctx: RunContext[MyDeps], inputs: FetchFinancialsInput)
 
     ctx.deps.register_evidence(list(metric_candidates))
     ctx.deps.register_financial_source(reference_id, {"data": selected_data})
-    return {
+    output = {
         "reference_id": reference_id,
         "statement_type": inputs.statement_type,
         "frequency": inputs.frequency,
@@ -330,6 +352,8 @@ def historical_financials(ctx: RunContext[MyDeps], inputs: FetchFinancialsInput)
             }
         ),
     }
+    ctx.deps.tool_event("historical_financials", "completed", arguments, output)
+    return output
 
 
 def _company_match(
@@ -350,15 +374,19 @@ def _company_match(
 @agent.tool
 def search_web(ctx: RunContext[MyDeps], inputs: SearchWebInput):
     """Discover bounded, dated Tavily results within this request's company scope."""
+    arguments = inputs.model_dump(mode="json")
+    ctx.deps.tool_event("search_web", "running", arguments)
     as_of = ctx.deps.as_of.astimezone(timezone.utc)
     date_from = (inputs.date_from or as_of - timedelta(days=30)).astimezone(
         timezone.utc
     )
     if date_from > as_of:
-        return {"error": "date_from is after as_of", "as_of": as_of.isoformat()}
+        output = {"error": "date_from is after as_of", "as_of": as_of.isoformat()}
+        ctx.deps.tool_event("search_web", "completed", arguments, output)
+        return output
     company = ctx.deps.company_name or ctx.deps.symbol
     scoped_query = f"{company} {inputs.query}"
-    results, date_rejections = tavily.search(
+    results, date_rejections, provider_usage = tavily.search(
         query=scoped_query,
         topic=inputs.topic,
         date_from=date_from,
@@ -371,20 +399,25 @@ def search_web(ctx: RunContext[MyDeps], inputs: SearchWebInput):
         if _company_match(result, ctx.deps.symbol, ctx.deps.company_name)
     ]
     ctx.deps.register_web_results(matching)
-    return {
+    output = {
         "query": scoped_query,
         "topic": inputs.topic,
         "date_from": date_from.isoformat(),
         "as_of": as_of.isoformat(),
         "rejected_dates_or_metadata": date_rejections,
         "rejected_company_scope": len(results) - len(matching),
+        "provider_usage": provider_usage,
         "results": [result.model_dump(mode="json") for result in matching],
     }
+    ctx.deps.tool_event("search_web", "completed", arguments, output)
+    return output
 
 
 @agent.tool
 def inspect_web_results(ctx: RunContext[MyDeps], inputs: InspectWebInput):
     """Extract selected search results and register exact stored passages."""
+    arguments = inputs.model_dump(mode="json")
+    ctx.deps.tool_event("inspect_web_results", "running", arguments)
     requested_ids = list(dict.fromkeys(inputs.result_ids))
     selected = [
         ctx.deps.web_results[result_id]
@@ -397,13 +430,17 @@ def inspect_web_results(ctx: RunContext[MyDeps], inputs: InspectWebInput):
         if result_id not in ctx.deps.web_results
     ]
     if not selected:
-        return {
+        output = {
             "focus": inputs.focus,
             "evidence_candidates": [],
             "unknown_result_ids": unknown,
             "failed_result_ids": [],
         }
-    pages, failed_urls = tavily.extract([result.source_url for result in selected])
+        ctx.deps.tool_event("inspect_web_results", "completed", arguments, output)
+        return output
+    pages, failed_urls, provider_usage = tavily.extract(
+        [result.source_url for result in selected]
+    )
     pages_by_url = {page.source_url: page for page in pages}
     candidates: list[DocumentEvidence] = []
     failed_ids: list[str] = []
@@ -435,7 +472,7 @@ def inspect_web_results(ctx: RunContext[MyDeps], inputs: InspectWebInput):
         else:
             failed_ids.append(result.result_id)
     ctx.deps.register_evidence(candidates)
-    return {
+    output = {
         "focus": inputs.focus,
         "evidence_candidates": [
             compact_document_evidence(candidate) for candidate in candidates
@@ -443,7 +480,10 @@ def inspect_web_results(ctx: RunContext[MyDeps], inputs: InspectWebInput):
         "unknown_result_ids": unknown,
         "failed_result_ids": failed_ids,
         "failed_urls": failed_urls,
+        "provider_usage": provider_usage,
     }
+    ctx.deps.tool_event("inspect_web_results", "completed", arguments, output)
+    return output
 
 
 async def run_research_briefing_agent(
@@ -452,6 +492,7 @@ async def run_research_briefing_agent(
     evidence_catalog: dict[str, EvidenceRecord],
     financial_sources: dict[str, object],
     run_id: UUID,
+    on_event: Callable[[str, str, str, dict[str, object]], object] | None = None,
 ) -> ResearchAgentExecution:
     """Run the bounded research agent with request-scoped tool dependencies."""
     agent_input = {
@@ -463,11 +504,27 @@ async def run_research_briefing_agent(
         as_of=request.as_of,
         evidence_catalog=dict(evidence_catalog),
         financial_sources=dict(financial_sources),
+        on_event=on_event,
         company_name=str(
             prefetched_context.get("company_snapshot", {}).get("company_name") or ""
         )
         or None,
     )
+    if on_event is not None:
+        on_event(
+            "agent",
+            "running",
+            "Model-visible research input prepared",
+            {
+                "input": agent_input,
+                "available_tools": [
+                    "search_documents",
+                    "historical_financials",
+                    "search_web",
+                    "inspect_web_results",
+                ],
+            },
+        )
 
     async with asyncio.timeout(120):
         result = await agent.run(

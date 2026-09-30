@@ -10,7 +10,7 @@ from opentelemetry.trace import get_current_span
 from pydantic_core import to_jsonable_python
 from sqlalchemy.orm import Session
 
-from backend.db import db_utils, schemas
+from backend.db import db_utils, llm_runs, schemas
 from backend.db.schemas import ResearchRun, ResearchRunStatus
 from backend.research_workflow.agent.agent import (
     model_name,
@@ -47,6 +47,10 @@ from backend.research_workflow.contracts import (
 from backend.research_workflow.data.market_data import (
     get_close_data,
     get_company_snapshot,
+)
+from backend.research_workflow.service.run_record import (
+    ResearchRunRecorder,
+    StepCallback,
 )
 
 logger = logging.getLogger(__name__)
@@ -206,8 +210,69 @@ def _compact_price_summary(
     return summary, selected_candidates
 
 
-async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowResult:
+def _create_research_attempt(
+    session: Session,
+    request: BriefingRequest,
+    fingerprint: str,
+    *,
+    resumed_from: ResearchRun | None = None,
+) -> ResearchRun:
+    shared = llm_runs.create_run(
+        session,
+        "research_workflow",
+        logfire_trace_id=current_trace_id(),
+    )
+    research_run = ResearchRun(
+        id=shared.id,
+        resumed_from_run_id=resumed_from.id if resumed_from else None,
+        request_fingerprint=fingerprint,
+        symbol=request.symbol.strip().upper(),
+        as_of=request.as_of,
+        status=ResearchRunStatus.PENDING,
+        request_payload=request.model_dump(mode="json"),
+        model_name=model_name,
+        prompt_version=prompt_version,
+        tool_version=tool_version,
+        schema_version=schema_version,
+        trace_id=current_trace_id(),
+        checkpoint_stage=(resumed_from.checkpoint_stage if resumed_from else None),
+        checkpoint_payload=(resumed_from.checkpoint_payload if resumed_from else None),
+        usage_payload=(resumed_from.usage_payload if resumed_from else {}),
+    )
+    session.add(research_run)
+    session.flush()
+    return research_run
+
+
+def _stale(run: ResearchRun, now: datetime) -> bool:
+    from datetime import timedelta
+
+    reference = run.started_at or run.created_at
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    return now - reference > timedelta(minutes=5)
+
+
+async def run_research_workflow(
+    request: BriefingRequest,
+    *,
+    on_step: StepCallback | None = None,
+) -> ResearchWorkflowResult:
     run_id: uuid.UUID | None = None
+    recorder: ResearchRunRecorder | None = None
+    usage_events: list[dict[str, object]] = []
+
+    def record_usage(component: str, usage: dict[str, object]) -> None:
+        entry = {"component": component, "usage": to_jsonable_python(usage)}
+        usage_events.append(entry)
+        if recorder is not None:
+            recorder.emit("agent", "completed", f"{component} usage recorded", entry)
+        if run_id is not None:
+            with db_utils.get_session() as usage_session:
+                usage_run = usage_session.get(ResearchRun, run_id)
+                if usage_run is not None:
+                    usage_run.usage_payload = {"calls": list(usage_events)}
+
     draft: DraftResearchBriefing | None = None
     catalog: dict[str, EvidenceRecord] | None = None
     financial_sources: dict[str, object] | None = None
@@ -216,6 +281,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
         fingerprint = create_fingerprint(request)
         async with RESEARCH_SEMAPHORE, asyncio.timeout(180):
             with db_utils.get_session() as session:
+                now = datetime.now(timezone.utc)
                 cached_run = (
                     session.query(ResearchRun)
                     .filter(
@@ -228,9 +294,27 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                             ]
                         ),
                     )
-                    .order_by(ResearchRun.completed_at.desc())
+                    .order_by(ResearchRun.created_at.desc())
                     .first()
                 )
+                if (
+                    cached_run
+                    and cached_run.status
+                    in (
+                        ResearchRunStatus.PENDING,
+                        ResearchRunStatus.RUNNING,
+                    )
+                    and _stale(cached_run, now)
+                ):
+                    cached_run.status = ResearchRunStatus.FAILED
+                    cached_run.completed_at = now
+                    cached_run.error_payload = {
+                        "type": "StaleRun",
+                        "message": "Run stopped updating before reaching a terminal state.",
+                    }
+                    llm_runs.fail_run(session, cached_run.id)
+                    session.flush()
+                    cached_run = None
                 if cached_run:
                     logger.info(
                         "research_run_cache_hit run_id=%s symbol=%s status=%s",
@@ -267,16 +351,56 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     .first()
                 )
                 if checkpointed_run:
-                    run_id = checkpointed_run.id
                     draft, catalog, financial_sources = _checkpoint_state(
                         checkpointed_run.checkpoint_payload
                     )
-                    checkpointed_run.status = ResearchRunStatus.RUNNING
-                    checkpointed_run.error_payload = None
-                    checkpointed_run.completed_at = None
-                    checkpointed_run.started_at = datetime.now(timezone.utc)
-                    checkpointed_run.trace_id = current_trace_id()
+                    prior_calls = (checkpointed_run.usage_payload or {}).get("calls")
+                    if isinstance(prior_calls, list):
+                        usage_events.extend(prior_calls)
+                    elif checkpointed_run.usage_payload:
+                        usage_events.append(
+                            {
+                                "component": "research_agent",
+                                "usage": checkpointed_run.usage_payload,
+                            }
+                        )
+                    new_run = _create_research_attempt(
+                        session, request, fingerprint, resumed_from=checkpointed_run
+                    )
+                    run_id = new_run.id
                     resuming_from_checkpoint = True
+
+            if resuming_from_checkpoint and run_id is not None:
+                recorder = ResearchRunRecorder(run_id, on_step=on_step)
+                recorder.emit(
+                    "run",
+                    "completed",
+                    "Resumed from a saved agent checkpoint",
+                    {
+                        "resumed_from_run_id": str(checkpointed_run.id),
+                        "checkpoint_stage": AGENT_COMPLETED_CHECKPOINT,
+                    },
+                )
+                recorder.emit(
+                    "scope",
+                    "completed",
+                    "Reusing frozen checkpoint evidence",
+                    {
+                        "symbol": request.symbol.strip().upper(),
+                        "as_of": request.as_of.isoformat(),
+                        "evidence_count": len(catalog or {}),
+                        "new_source_calls": False,
+                    },
+                )
+                with db_utils.get_session() as session:
+                    resumed = session.get(ResearchRun, run_id)
+                    if resumed is None:
+                        raise RuntimeError("Resumed research run disappeared")
+                    llm_runs.start_run(
+                        session, run_id, logfire_trace_id=current_trace_id()
+                    )
+                    resumed.status = ResearchRunStatus.RUNNING
+                    resumed.started_at = datetime.now(timezone.utc)
 
             if resuming_from_checkpoint:
                 logger.info(
@@ -289,21 +413,9 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
             if not resuming_from_checkpoint:
                 now = datetime.now(timezone.utc)
                 with db_utils.get_session() as session:
-                    research_run = schemas.ResearchRun(
-                        request_fingerprint=fingerprint,
-                        symbol=request.symbol.strip().upper(),
-                        as_of=request.as_of,
-                        status=ResearchRunStatus.PENDING,
-                        request_payload=request.model_dump(mode="json"),
-                        model_name=model_name,
-                        prompt_version=prompt_version,
-                        tool_version=tool_version,
-                        schema_version=schema_version,
-                        started_at=now,
-                        trace_id=current_trace_id(),
+                    research_run = _create_research_attempt(
+                        session, request, fingerprint
                     )
-                    session.add(research_run)
-                    session.flush()
                     run_id = research_run.id
 
                 logger.info(
@@ -314,6 +426,31 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                 )
                 if run_id is None:
                     raise RuntimeError("Research run ID was not generated")
+                recorder = ResearchRunRecorder(run_id, on_step=on_step)
+                recorder.emit(
+                    "run",
+                    "completed",
+                    "Research run created",
+                    {
+                        "request": request.model_dump(mode="json"),
+                        "fingerprint": fingerprint,
+                    },
+                )
+                recorder.emit(
+                    "scope",
+                    "completed",
+                    "Research evidence scope set",
+                    {
+                        "symbol": request.symbol.strip().upper(),
+                        "as_of": request.as_of.isoformat(),
+                        "available_tools": [
+                            "search_documents",
+                            "historical_financials",
+                            "search_web",
+                            "inspect_web_results",
+                        ],
+                    },
+                )
                 if request.as_of > now:
                     raise ValueError(f"{request.as_of} cannot be after today")
                 if len(request.research_question) < 30:
@@ -321,8 +458,23 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         f"{request.research_question} does not meet length requirements!"
                     )
 
+                recorder.emit(
+                    "classifier",
+                    "running",
+                    "Classifying research request",
+                    {"symbol": request.symbol, "question": request.research_question},
+                )
                 query_classification = await run_query_classifier(
-                    request.symbol, request.research_question, run_id
+                    request.symbol,
+                    request.research_question,
+                    run_id,
+                    on_usage=record_usage,
+                )
+                recorder.emit(
+                    "classifier",
+                    "completed",
+                    "Research request classified",
+                    query_classification.model_dump(mode="json"),
                 )
                 logger.info(
                     "query_classification_completed run_id=%s symbol=%s "
@@ -338,6 +490,12 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         f"{query_classification.reasoning}"
                     )
 
+                recorder.emit(
+                    "prefetch",
+                    "running",
+                    "Fetching company identity and close prices",
+                    {"symbol": request.symbol, "as_of": request.as_of.isoformat()},
+                )
                 company_snapshot, close_data = await asyncio.gather(
                     asyncio.to_thread(get_company_snapshot, request.symbol),
                     asyncio.to_thread(get_close_data, request.symbol),
@@ -350,6 +508,12 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         close_data,
                     )
                 )
+                recorder.emit(
+                    "prefetch",
+                    "completed",
+                    "Prefetched model context",
+                    {"model_visible_context": prefetched_context},
+                )
 
                 with db_utils.get_session() as session:
                     research_run = session.get(ResearchRun, run_id)
@@ -357,6 +521,9 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         raise ValueError(f"Research run {run_id} not found")
                     research_run.status = ResearchRunStatus.RUNNING
                     research_run.started_at = datetime.now(timezone.utc)
+                    llm_runs.start_run(
+                        session, run_id, logfire_trace_id=current_trace_id()
+                    )
 
                 logger.info(
                     "research_run_started run_id=%s symbol=%s status=%s",
@@ -364,15 +531,36 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     request.symbol.strip().upper(),
                     ResearchRunStatus.RUNNING.value,
                 )
+                recorder.emit(
+                    "agent",
+                    "running",
+                    "Research agent started",
+                    {
+                        "model": model_name,
+                        "prompt_version": prompt_version,
+                        "tool_version": tool_version,
+                    },
+                )
                 execution = await run_research_briefing_agent(
                     run_id=run_id,
                     request=request,
                     prefetched_context=prefetched_context,
                     evidence_catalog=catalog,
                     financial_sources=financial_sources,
+                    on_event=recorder.emit,
                 )
                 result = execution.result
                 draft = result.output
+                record_usage("research_agent", asdict(result.usage))
+                recorder.emit(
+                    "agent",
+                    "completed",
+                    "Research agent returned draft",
+                    {
+                        "draft": draft.model_dump(mode="json"),
+                        "usage": to_jsonable_python(asdict(result.usage)),
+                    },
+                )
                 if not draft.key_findings:
                     raise RuntimeError("Research agent returned no key findings")
 
@@ -383,9 +571,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     research_run = session.get(ResearchRun, run_id)
                     if research_run is None:
                         raise RuntimeError(f"Research run {run_id} not found")
-                    research_run.usage_payload = to_jsonable_python(
-                        asdict(result.usage)
-                    )
+                    research_run.usage_payload = {"calls": list(usage_events)}
                     research_run.checkpoint_stage = AGENT_COMPLETED_CHECKPOINT
                     research_run.checkpoint_payload = to_jsonable_python(
                         {
@@ -404,15 +590,34 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     request.symbol.strip().upper(),
                     AGENT_COMPLETED_CHECKPOINT,
                 )
+                recorder.emit(
+                    "checkpoint",
+                    "completed",
+                    "Agent checkpoint saved",
+                    {
+                        "stage": AGENT_COMPLETED_CHECKPOINT,
+                        "evidence_count": len(catalog),
+                    },
+                )
 
             if (
                 run_id is None
                 or draft is None
                 or catalog is None
                 or financial_sources is None
+                or recorder is None
             ):
                 raise RuntimeError("Research workflow state is incomplete")
 
+            recorder.emit(
+                "verification",
+                "running",
+                "Resolving cited evidence",
+                {
+                    "draft_findings": len(draft.key_findings),
+                    "catalog_size": len(catalog),
+                },
+            )
             briefing, unresolved_ids = hydrate_briefing(draft, catalog)
             verification = VerificationResult(
                 invalid_evidence_references=unresolved_ids,
@@ -470,8 +675,34 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                 failure_reason = precheck_failure
                 if failure_reason is None:
                     try:
+                        recorder.emit(
+                            "verification",
+                            "running",
+                            "Checking finding grounding",
+                            {
+                                "finding_index": index,
+                                "statement": finding.statement,
+                                "evidence_ids": [
+                                    item.evidence_id for item in valid_evidence
+                                ],
+                            },
+                        )
                         grounding = await verify_finding(
-                            finding, valid_evidence, run_id, index
+                            finding,
+                            valid_evidence,
+                            run_id,
+                            index,
+                            on_usage=record_usage,
+                        )
+                        recorder.emit(
+                            "verification",
+                            "completed",
+                            "Grounding judgment recorded",
+                            {
+                                "finding_index": index,
+                                "is_supported": grounding.is_supported,
+                                "reason": grounding.reasoning,
+                            },
                         )
                         if grounding.is_supported:
                             verified_findings.append(
@@ -488,6 +719,12 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         failure_reason = "Grounding classifier failed."
 
                 try:
+                    recorder.emit(
+                        "verification",
+                        "running",
+                        "Repairing rejected finding",
+                        {"finding_index": index, "failure_reason": failure_reason},
+                    )
                     revision = await revise_finding(
                         finding,
                         valid_evidence,
@@ -495,6 +732,16 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         failure_reason,
                         run_id,
                         index,
+                        on_usage=record_usage,
+                    )
+                    recorder.emit(
+                        "verification",
+                        "completed",
+                        "Finding repair decision recorded",
+                        {
+                            "finding_index": index,
+                            "revision": revision.model_dump(mode="json"),
+                        },
                     )
                     if revision.action == "drop_duplicate":
                         logger.info(
@@ -537,6 +784,17 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         valid_evidence,
                         run_id,
                         index,
+                        on_usage=record_usage,
+                    )
+                    recorder.emit(
+                        "verification",
+                        "completed",
+                        "Revised finding checked",
+                        {
+                            "finding_index": index,
+                            "is_supported": revised_grounding.is_supported,
+                            "reason": revised_grounding.reasoning,
+                        },
                     )
                     snippet_only = all(
                         isinstance(item, DocumentEvidence)
@@ -585,9 +843,20 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                 }.values()
             )
             try:
+                recorder.emit(
+                    "verification",
+                    "running",
+                    "Synthesizing checked findings",
+                    {
+                        "accepted_findings": [
+                            finding.statement for finding in verified_findings
+                        ]
+                    },
+                )
                 narrative = await synthesize_narrative(
                     verified_findings,
                     run_id,
+                    on_usage=record_usage,
                 )
                 summary_check = await verify_finding(
                     Finding(
@@ -599,6 +868,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     all_evidence,
                     run_id,
                     -1,
+                    on_usage=record_usage,
                 )
                 outlook_check = await verify_finding(
                     Finding(
@@ -610,6 +880,16 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     all_evidence,
                     run_id,
                     -2,
+                    on_usage=record_usage,
+                )
+                recorder.emit(
+                    "verification",
+                    "completed",
+                    "Narrative grounding checked",
+                    {
+                        "summary_supported": summary_check.is_supported,
+                        "outlook_supported": outlook_check.is_supported,
+                    },
                 )
                 briefing.executive_summary = (
                     narrative.executive_summary
@@ -681,6 +961,19 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                 research_run.checkpoint_stage = VERIFICATION_COMPLETED_CHECKPOINT
                 research_run.status = ResearchRunStatus.COMPLETED
                 research_run.completed_at = datetime.now(timezone.utc)
+                llm_runs.complete_run(session, run_id)
+
+            recorder.emit(
+                "persistence",
+                "completed",
+                "Verified briefing saved",
+                {
+                    "status": "completed",
+                    "stop_reason": "verified_briefing",
+                    "approval_ready": verification.approval_ready,
+                    "accepted_findings": len(verified_findings),
+                },
+            )
 
             logger.info(
                 "research_run_completed run_id=%s symbol=%s status=%s "
@@ -694,6 +987,7 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
 
     except Exception as exc:
         if run_id is not None:
+            marked_failed = False
             with db_utils.get_session() as session:
                 research_run = session.get(ResearchRun, run_id)
                 if research_run and research_run.status != ResearchRunStatus.COMPLETED:
@@ -703,12 +997,23 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                         "message": str(exc),
                     }
                     research_run.completed_at = datetime.now(timezone.utc)
+                    llm_runs.fail_run(
+                        session, run_id, logfire_trace_id=current_trace_id()
+                    )
+                    marked_failed = True
             logger.error(
                 "research_run_failed run_id=%s symbol=%s error_type=%s",
                 run_id,
                 request.symbol.strip().upper(),
                 type(exc).__name__,
             )
+            if recorder is not None and marked_failed:
+                recorder.emit(
+                    "persistence",
+                    "failed",
+                    "Research run failed",
+                    {"stop_reason": type(exc).__name__, "error": str(exc)},
+                )
         raise
 
 

@@ -1,57 +1,26 @@
-from typing import Literal, TypeVar
+from collections.abc import Callable
+from dataclasses import asdict
+from typing import TypeVar
 from uuid import UUID
 
 from openai.types.shared.reasoning_effort import ReasoningEffort
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
 from pydantic_ai import Agent, UsageLimits
 from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 
 from backend.research_workflow.contracts import (
-    ClaimType,
+    BriefingNarrative,
     EvidenceRecord,
     Finding,
+    FindingRevision,
+    GroundingClassification,
+    QueryClassification,
 )
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
+UsageCallback = Callable[[str, dict[str, object]], None]
 
 MODEL_NAME = "openai:gpt-5.6-luna"
-
-
-class QueryClassification(BaseModel):
-    is_relevant: bool
-    reasoning: str = Field(max_length=120)
-
-
-class GroundingClassification(BaseModel):
-    is_supported: bool
-    reasoning: str
-
-
-class FindingRevision(BaseModel):
-    action: Literal["revise", "drop_duplicate"]
-    statement: str | None = Field(default=None, min_length=1)
-    claim_type: ClaimType | None = None
-    confidence: int | None = Field(default=None, ge=1, le=3)
-
-    @model_validator(mode="after")
-    def validate_action_fields(self) -> "FindingRevision":
-        revision_fields = (self.statement, self.claim_type, self.confidence)
-        if self.action == "revise" and any(value is None for value in revision_fields):
-            raise ValueError(
-                "statement, claim_type, and confidence are required when revising"
-            )
-        if self.action == "drop_duplicate" and any(
-            value is not None for value in revision_fields
-        ):
-            raise ValueError(
-                "revision fields must be omitted when dropping a duplicate"
-            )
-        return self
-
-
-class BriefingNarrative(BaseModel):
-    executive_summary: str = Field(min_length=1)
-    outlook: str = Field(min_length=1)
 
 
 def create_classifier(
@@ -94,7 +63,7 @@ Set reasoning to one short sentence explaining the decision. Do not exceed 12 wo
 
 
 async def run_query_classifier(
-    symbol: str, query: str, run_id: UUID
+    symbol: str, query: str, run_id: UUID, *, on_usage: UsageCallback | None = None
 ) -> QueryClassification:
     result = await query_classifier.run(
         f"""
@@ -112,6 +81,8 @@ Research question:
             "component": "research_breifing_query_classifier",
         },
     )
+    if on_usage is not None:
+        on_usage("query_classifier", asdict(result.usage))
     return result.output
 
 
@@ -146,6 +117,8 @@ async def verify_finding(
     valid_evidence: list[EvidenceRecord],
     run_id: UUID,
     finding_index: int,
+    *,
+    on_usage: UsageCallback | None = None,
 ) -> GroundingClassification:
     result = await grounding_classifier.run(
         f"""
@@ -169,6 +142,8 @@ Verified evidence:
         },
     )
 
+    if on_usage is not None:
+        on_usage("grounding_classifier", asdict(result.usage))
     return result.output
 
 
@@ -204,6 +179,8 @@ async def revise_finding(
     failure_reason: str,
     run_id: UUID,
     finding_index: int,
+    *,
+    on_usage: UsageCallback | None = None,
 ) -> FindingRevision:
     result = await finding_revision_agent.run(
         f"""
@@ -233,6 +210,8 @@ Accepted findings:
             "component": "research_briefing_finding_revision",
         },
     )
+    if on_usage is not None:
+        on_usage("finding_revision", asdict(result.usage))
     return result.output
 
 
@@ -252,6 +231,8 @@ outlook must be fully supportable by the same evidence as the verified findings.
 async def synthesize_narrative(
     findings: list[Finding],
     run_id: UUID,
+    *,
+    on_usage: UsageCallback | None = None,
 ) -> BriefingNarrative:
     result = await narrative_agent.run(
         f"""
@@ -266,4 +247,6 @@ Verified findings:
             "component": "research_briefing_narrative_synthesis",
         },
     )
+    if on_usage is not None:
+        on_usage("narrative_synthesis", asdict(result.usage))
     return result.output

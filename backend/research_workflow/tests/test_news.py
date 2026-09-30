@@ -13,6 +13,7 @@ class TavilyTests(unittest.TestCase):
         as_of = datetime.now(timezone.utc) - timedelta(minutes=1)
         response = Mock(ok=True)
         response.json.return_value = {
+            "usage": {"credits": 1},
             "results": [
                 {
                     "title": "Apple launches product",
@@ -46,10 +47,10 @@ class TavilyTests(unittest.TestCase):
                     "content": "Apple",
                     "published_date": as_of.date().isoformat(),
                 },
-            ]
+            ],
         }
         post.return_value = response
-        results, rejected = tavily.search(
+        results, rejected, usage = tavily.search(
             query="Apple product",
             topic="news",
             date_from=as_of - timedelta(days=2),
@@ -58,6 +59,7 @@ class TavilyTests(unittest.TestCase):
         )
         self.assertEqual(len(results), 2)
         self.assertEqual(rejected, 3)
+        self.assertEqual(usage, {"credits": 1})
         self.assertEqual(results[0].source_url, "https://example.com/one")
         payload = post.call_args.kwargs["json"]
         self.assertTrue(payload["filter_by_published_date"])
@@ -71,6 +73,7 @@ class TavilyTests(unittest.TestCase):
     def test_extract_reports_partial_failure(self, post: Mock) -> None:
         response = Mock(ok=True)
         response.json.return_value = {
+            "usage": {"credits": 2},
             "results": [
                 {"url": "https://example.com/one", "raw_content": "Apple source text"}
             ],
@@ -79,11 +82,12 @@ class TavilyTests(unittest.TestCase):
             ],
         }
         post.return_value = response
-        pages, failed = tavily.extract(
+        pages, failed, usage = tavily.extract(
             ["https://example.com/one", "https://example.com/two"]
         )
         self.assertEqual(pages[0].content, "Apple source text")
         self.assertEqual(failed, ["https://example.com/two"])
+        self.assertEqual(usage, {"credits": 2})
         self.assertEqual(post.call_args.kwargs["json"]["format"], "text")
 
     def test_clean_article_text_removes_navigation_and_related_content(self) -> None:

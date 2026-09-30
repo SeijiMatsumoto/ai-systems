@@ -2,12 +2,24 @@ from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.db.schemas import DocumentType, ResearchRunStatus
 
 ScalarValue: TypeAlias = str | int | float | bool | None
 ClaimType: TypeAlias = Literal["fact", "calculation", "inference", "scenario"]
+ResearchStepStage: TypeAlias = Literal[
+    "run",
+    "scope",
+    "classifier",
+    "prefetch",
+    "agent",
+    "tool",
+    "verification",
+    "checkpoint",
+    "persistence",
+]
+ResearchStepStatus: TypeAlias = Literal["running", "completed", "failed", "skipped"]
 
 
 class BriefingRequest(BaseModel):
@@ -77,6 +89,53 @@ class WebSearchResult(BaseModel):
 class ExtractedWebPage(BaseModel):
     source_url: str
     content: str
+
+
+class QueryClassification(BaseModel):
+    is_relevant: bool
+    reasoning: str = Field(max_length=120)
+
+
+class GroundingClassification(BaseModel):
+    is_supported: bool
+    reasoning: str
+
+
+class FindingRevision(BaseModel):
+    action: Literal["revise", "drop_duplicate"]
+    statement: str | None = Field(default=None, min_length=1)
+    claim_type: ClaimType | None = None
+    confidence: int | None = Field(default=None, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def validate_action_fields(self) -> "FindingRevision":
+        revision_fields = (self.statement, self.claim_type, self.confidence)
+        if self.action == "revise" and any(value is None for value in revision_fields):
+            raise ValueError(
+                "statement, claim_type, and confidence are required when revising"
+            )
+        if self.action == "drop_duplicate" and any(
+            value is not None for value in revision_fields
+        ):
+            raise ValueError(
+                "revision fields must be omitted when dropping a duplicate"
+            )
+        return self
+
+
+class BriefingNarrative(BaseModel):
+    executive_summary: str = Field(min_length=1)
+    outlook: str = Field(min_length=1)
+
+
+class ResearchWorkflowStep(BaseModel):
+    run_id: UUID
+    sequence: int = Field(ge=1)
+    stage: ResearchStepStage
+    status: ResearchStepStatus
+    summary: str = Field(min_length=1)
+    details: dict[str, object] = Field(default_factory=dict)
+    recorded_at: datetime
 
 
 class EvidenceCandidate(BaseModel):

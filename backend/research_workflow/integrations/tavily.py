@@ -60,7 +60,7 @@ def search(
     date_from: datetime,
     as_of: datetime,
     limit: int,
-) -> tuple[list[WebSearchResult], int]:
+) -> tuple[list[WebSearchResult], int, dict[str, object]]:
     """Return dated discovery records; undated and out-of-scope results are dropped."""
     data = _request(
         "search",
@@ -119,10 +119,13 @@ def search(
                 date_precision=precision,
             )
         )
-    return accepted[:limit], rejected + max(0, len(accepted) - limit)
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    return accepted[:limit], rejected + max(0, len(accepted) - limit), usage
 
 
-def extract(urls: list[str]) -> tuple[list[ExtractedWebPage], list[str]]:
+def extract(
+    urls: list[str],
+) -> tuple[list[ExtractedWebPage], list[str], dict[str, object]]:
     """Extract only caller-selected search URLs and surface individual failures."""
     if not 1 <= len(urls) <= 3 or any(not url.startswith("https://") for url in urls):
         raise ValueError("Tavily extraction requires one to three HTTPS URLs")
@@ -167,4 +170,5 @@ def extract(urls: list[str]) -> tuple[list[ExtractedWebPage], list[str]]:
         for url in urls
         if url not in {page.source_url for page in pages} and url not in failed
     )
-    return pages, failed
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    return pages, failed, usage

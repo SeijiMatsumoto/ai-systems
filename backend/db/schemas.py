@@ -162,7 +162,10 @@ class ResearchRun(Base):
     __tablename__ = "research_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True), ForeignKey("llm_runs.id"), primary_key=True
+    )
+    resumed_from_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("research_runs.id"), nullable=True
     )
     request_fingerprint: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True
@@ -181,20 +184,24 @@ class ResearchRun(Base):
     )
 
     # These payloads are validated by Pydantic at the application boundary.
-    request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    request_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
     briefing_payload: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
     )
     verification_payload: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
     )
     usage_payload: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict
     )
-    error_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    error_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
     checkpoint_stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
     checkpoint_payload: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
     )
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
@@ -211,4 +218,20 @@ class ResearchRun(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class ResearchRunStep(Base):
+    """One persisted, ordered public workflow event for a research attempt."""
+
+    __tablename__ = "research_run_steps"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("research_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
     )

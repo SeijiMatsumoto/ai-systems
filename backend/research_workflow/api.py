@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import date
 from typing import Literal
 from uuid import UUID
@@ -6,11 +7,12 @@ from uuid import UUID
 import logfire
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.db import db_utils
-from backend.db.schemas import ResearchRun
-from backend.research_workflow.contracts import BriefingRequest
+from backend.db.schemas import ResearchRun, ResearchRunStep
+from backend.research_workflow.contracts import BriefingRequest, ResearchWorkflowStep
 from backend.research_workflow.data.filings import ingest_filings
 from backend.research_workflow.service.ingestion import (
     backfill_company_data,
@@ -20,6 +22,7 @@ from backend.research_workflow.service.research import (
 )
 
 app = FastAPI()
+BACKGROUND_RESEARCH_TASKS: set[asyncio.Task[None]] = set()
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,6 +47,46 @@ async def run_agent(request: BriefingRequest):
         ) from exc
 
 
+@app.post("/agent/research_brief/stream")
+async def stream_agent(request: BriefingRequest):
+    """Stream steps after each is saved; execution continues if the client leaves."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+    def on_step(step: ResearchWorkflowStep) -> None:
+        item = ("step", step.model_dump(mode="json"))
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is loop:
+            queue.put_nowait(item)
+        else:
+            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+
+    async def execute() -> None:
+        try:
+            result = await run_research_workflow(request, on_step=on_step)
+            await queue.put(("result", result.model_dump(mode="json")))
+        except Exception as exc:  # noqa: BLE001 - return workflow failures as SSE
+            await queue.put(
+                ("error", {"type": type(exc).__name__, "message": str(exc)})
+            )
+
+    task = asyncio.create_task(execute())
+    BACKGROUND_RESEARCH_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_RESEARCH_TASKS.discard)
+
+    async def events():
+        while True:
+            event, payload = await queue.get()
+            yield f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+            if event in {"result", "error"}:
+                break
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
 def get_research_run_detail(run_id: UUID) -> dict[str, object]:
     with db_utils.get_session() as session:
         research_run = session.get(ResearchRun, run_id)
@@ -52,6 +95,7 @@ def get_research_run_detail(run_id: UUID) -> dict[str, object]:
 
         return {
             "run_id": research_run.id,
+            "resumed_from_run_id": research_run.resumed_from_run_id,
             "symbol": research_run.symbol,
             "as_of": research_run.as_of,
             "status": research_run.status,
@@ -70,6 +114,13 @@ def get_research_run_detail(run_id: UUID) -> dict[str, object]:
             "created_at": research_run.created_at,
             "started_at": research_run.started_at,
             "completed_at": research_run.completed_at,
+            "workflow_steps": [
+                row.payload
+                for row in session.query(ResearchRunStep)
+                .filter(ResearchRunStep.run_id == run_id)
+                .order_by(ResearchRunStep.sequence)
+                .all()
+            ],
         }
 
 

@@ -2,9 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from backend.research_workflow.agent.classifiers import (
-    FindingRevision,
-)
+from backend.research_workflow.contracts import FindingRevision
 
 
 class FindingRevisionTests(unittest.TestCase):

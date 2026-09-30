@@ -122,7 +122,7 @@ class ResearchAgentLoopTests(unittest.IsolatedAsyncioTestCase):
             agent.override(model=FunctionModel(model_function)),
             patch(
                 "backend.research_workflow.agent.agent.tavily.search",
-                return_value=([search_result], 0),
+                return_value=([search_result], 0, {"credits": 1}),
             ),
             patch(
                 "backend.research_workflow.agent.agent.tavily.extract",
@@ -134,6 +134,7 @@ class ResearchAgentLoopTests(unittest.IsolatedAsyncioTestCase):
                         )
                     ],
                     [],
+                    {"credits": 2},
                 ),
             ),
             patch(

@@ -56,7 +56,7 @@ class AgentToolResponseTests(unittest.TestCase):
             ),
         ]
         with patch.object(
-            agent_module.tavily, "search", return_value=(results, 1)
+            agent_module.tavily, "search", return_value=(results, 1, {})
         ) as search:
             response = agent_module.search_web(
                 context, SearchWebInput(query="product roadmap execution risk")
@@ -114,6 +114,7 @@ class AgentToolResponseTests(unittest.TestCase):
                         )
                     ],
                     [],
+                    {},
                 ),
             ) as extract,
             patch.object(

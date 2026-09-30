@@ -23,6 +23,25 @@ The user approved this overall sequence, not the implementation details of any p
 | 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Reviewed and committed |
 | 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Not planned in detail |
 
+## Log-stream entry-point rework
+
+The user approved the rework overview and Phase 1 implementation on 2026-09-29.
+Keep each phase uncommitted until user review, then request approval before moving on.
+
+| Phase | Outcome | Status |
+| --- | --- | --- |
+| 1. Stream and group | Versioned replay fixture, signature groups, cross-service correlation, deterministic candidate rules | Reviewed and committed |
+| 2. Classify and trigger | Jev judgment, application gate, detected incident, snapshot-scoped investigator | Awaiting detailed plan and approval |
+| 3. UI and scenario checks | Replay controls and end-to-end harness trace with labeled scenarios | Awaiting detailed plan and approval |
+
+Phase 1 adds `fixtures/v2/`, `detection.py`, and `replay_cli.py`. The new
+fixture derives from v1 and adds a short email retry burst plus an inventory
+cache fallback that meets candidate rules but is labeled nonincident. The
+deterministic replay emits one JSON step per log and two candidate groups.
+Its labels are kept in `expected_detection.json`, outside replayed telemetry.
+No Jev call, auto-trigger, API change, or frontend change exists yet. The
+committed alert-first UI still runs against v1 until later phases replace it.
+
 ## Current implementation
 
 As of 2026-09-29, `fixtures/v1/` and `telemetry.py` provide synthetic telemetry and four scoped Python queries. `agent.py` and `service.py` provide a bounded investigator using `backend/db/llm_runs.py`. `verification.py` constructs a cited report or structured failures, and `api.py` exposes both a final-response route and a streaming workflow-step route. `frontend/src/IncidentWorkspace.tsx` submits the synthetic alert and renders live scope, registry, agent, tool, and verification steps, followed by the report, cited evidence, coverage gaps, failure state, and engineer-review requirement. Report and workflow steps remain response-only. Offline fake-model tests cover the agent, trace, and report checks; the frontend build and lint plus local mocked API preview cover the UI. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.

@@ -1,0 +1,63 @@
+{
+  "fixture_id": "checkout-stream-detection-2026-04-14",
+  "version": 2,
+  "window_start": "2026-04-14T14:00:00Z",
+  "window_end": "2026-04-14T15:00:00Z",
+  "services": [
+    "gateway",
+    "storefront",
+    "checkout",
+    "payments",
+    "inventory",
+    "email-worker"
+  ],
+  "related_services": {
+    "gateway": [
+      "gateway",
+      "storefront",
+      "checkout",
+      "payments",
+      "inventory"
+    ],
+    "storefront": [
+      "gateway",
+      "storefront",
+      "checkout",
+      "payments",
+      "inventory"
+    ],
+    "checkout": [
+      "gateway",
+      "storefront",
+      "checkout",
+      "payments",
+      "inventory"
+    ],
+    "payments": [
+      "gateway",
+      "storefront",
+      "checkout",
+      "payments",
+      "inventory"
+    ],
+    "inventory": [
+      "gateway",
+      "storefront",
+      "checkout",
+      "payments",
+      "inventory"
+    ],
+    "email-worker": [
+      "email-worker"
+    ]
+  },
+  "coverage_gaps": [
+    {
+      "source": "trace",
+      "service": "payments",
+      "start": "2026-04-14T14:26:00Z",
+      "end": "2026-04-14T14:32:00Z",
+      "reason": "Payments spans were dropped by the synthetic 10% sampler during peak load; logs and metrics continue."
+    }
+  ]
+}

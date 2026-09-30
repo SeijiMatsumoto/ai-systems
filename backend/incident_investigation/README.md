@@ -2,6 +2,10 @@
 
 **Status:** runnable local demo with synthetic telemetry, read-only queries, a bounded investigator, citation checks, backend API, and an engineer-review frontend.
 
+**Entry-point rework in progress:** the current UI still starts from the v1 alert. A
+new offline v2 log replay and deterministic candidate selector are implemented;
+Jev classification, automatic investigation triggering, and replay UI are later phases.
+
 ## Demo contract
 
 - **Input:** a service, alert ID, and investigation time window over synthetic logs, metrics, traces, and deployment records.
@@ -16,6 +20,36 @@ Alert + time window -> deterministic telemetry queries -> bounded evidence set
 ```
 
 The checked-in `fixtures/v1/` dataset covers a checkout error spike across gateway, storefront, checkout, payments, and inventory, plus unrelated email-worker traffic. It contains 443 logs, 1,281 minute-level metric points, 180 trace spans, three change records, and one alert. Payments database connection waits rise after a pool limit changes from 40 to 4; checkout errors follow. A nearby storefront deployment is a competing correlation, and payments trace spans have a declared sampling gap from 14:26 to 14:32 UTC. The fixture is deterministic and can be regenerated with `python backend/incident_investigation/fixtures/generate_v1.py`.
+
+### Offline log replay (rework Phase 1)
+
+`fixtures/v2/` preserves the multi-service telemetry without a prewritten alert
+and adds two distinct
+nonincident cases: two email delivery errors that stay below the candidate
+threshold, and three inventory cache refresh errors where a fallback succeeds.
+`fixtures/generate_v2.py` derives it reproducibly from v1. Its
+`expected_detection.json` contains labels for offline tests and is never fed to
+the replay.
+
+`detection.py` replays all 448 logs in timestamp order. It groups identical
+service/level/message signatures within five minutes and links warning/error
+groups across related services when they share a request or trace ID. Three
+distinct error requests in a rolling five-minute window emit one *candidate*
+per correlated cluster; subsequent matching errors are recorded as duplicate
+candidate steps. This rule does not decide whether the candidate is an incident.
+The checkout/payments cluster and inventory fallback cluster both become
+candidates. The email retries do not.
+
+To inspect every replay step without making model or provider calls:
+
+```sh
+.venv/bin/python -m backend.incident_investigation.replay_cli > /tmp/incident-replay.jsonl
+```
+
+Each JSON line contains the original log and locator, signature group and
+count, correlated cluster and services, distinct error-request count, decision,
+and reason. Replay pacing, classification, and investigation handoff are not
+connected yet.
 
 `telemetry.py` loads and validates the fixture, derives an investigation scope from the alert, and exposes four read-only queries: `search_logs`, `get_metric_series`, `inspect_trace`, and `list_changes`. They enforce service and time bounds, validate filters, cap results, and return source locators plus truncation or coverage-gap metadata. They are Python functions wrapped as agent tools, not HTTP routes yet.
 

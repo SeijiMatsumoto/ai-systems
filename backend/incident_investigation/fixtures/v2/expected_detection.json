@@ -1,0 +1,20 @@
+{
+  "candidate_cases": [
+    {
+      "service": "checkout",
+      "message": "Payment authorization timed out; order failed",
+      "incident": true
+    },
+    {
+      "service": "inventory",
+      "message": "Inventory cache refresh failed; stale cache served",
+      "incident": false
+    }
+  ],
+  "below_threshold_cases": [
+    {
+      "service": "email-worker",
+      "message": "Receipt delivery failed; retry scheduled"
+    }
+  ]
+}

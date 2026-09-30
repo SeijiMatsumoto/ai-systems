@@ -10,16 +10,25 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from backend.db.schemas import LlmRun, ResearchRun, ResearchRunStatus, ResearchRunStep
+from backend.db.schemas import (
+    DocumentType,
+    LlmRun,
+    ResearchRun,
+    ResearchRunStatus,
+    ResearchRunStep,
+)
 from backend.research_workflow.api import get_research_run_detail
 from backend.research_workflow.contracts import (
     BriefingNarrative,
     BriefingRequest,
+    DocumentEvidence,
     DraftFinding,
     DraftResearchBriefing,
     GroundingClassification,
     QueryClassification,
     ResearchQueryJevJudgment,
+    WebFindingSuggestion,
+    WebPassageJudgment,
 )
 from backend.research_workflow.service import research
 from backend.research_workflow.service.run_record import saved_steps
@@ -75,7 +84,7 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
             on_usage("query_classifier", {"requests": 1, "input_tokens": 20})
             return QueryClassification(is_relevant=True, reasoning="Company research")
 
-        async def jev(symbol, question):
+        async def jev(symbol, question, *, precheck):
             return ResearchQueryJevJudgment(
                 model="fake-jev",
                 question_version=1,
@@ -205,6 +214,18 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
             cached = await research.run_research_workflow(self.request)
 
         self.assertEqual(result.status, ResearchRunStatus.COMPLETED)
+        self.assertFalse(
+            any(
+                "Document searches expose" in note
+                for note in result.briefing.limitations
+            )
+        )
+        self.assertFalse(
+            any(
+                "Current Yahoo snapshot fields" in note
+                for note in result.briefing.limitations
+            )
+        )
         self.assertEqual(cached.run_id, result.run_id)
         self.assertEqual(len(agent_calls), 1)
         self.assertNotEqual(result.run_id, failed_id)
@@ -240,8 +261,210 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail["resumed_from_run_id"], failed_id)
         self.assertEqual(len(detail["workflow_steps"]), len(new_steps))
 
+    async def test_multi_source_web_coverage_is_saved_and_verified(self) -> None:
+        passage = DocumentEvidence(
+            evidence_id="doc:web",
+            reference_id="tavily:one",
+            title="Apple update",
+            retrieved_at=self.as_of,
+            published_at=self.as_of - timedelta(days=1),
+            document_type=DocumentType.ARTICLE,
+            content_quality="full_text",
+            document_id="d",
+            chunk_id="c",
+            chunk_index=0,
+            start_char=0,
+            end_char=73,
+            content_hash="a" * 64,
+            quote="Apple said a supplier expanded capacity and reduced delayed product shipments.",
+        )
+
+        async def jev(_symbol, _question, *, precheck):
+            return ResearchQueryJevJudgment(
+                model="fake",
+                question_version=1,
+                relevance_probability=0.95,
+                instruction_probability=0.01,
+                usage={"input_tokens": 10},
+            )
+
+        async def agent(**kwargs):
+            financial_id = next(iter(kwargs["evidence_catalog"]))
+            for name in (
+                "search_documents",
+                "historical_financials",
+                "search_web",
+                "inspect_web_results",
+            ):
+                kwargs["on_event"](
+                    "tool",
+                    "completed",
+                    f"{name} completed",
+                    {
+                        "tool_name": name,
+                        "arguments": {},
+                        "result": {"provider_usage": {"credits": 1}},
+                    },
+                )
+            draft = DraftResearchBriefing(
+                executive_summary="Financial and filing review.",
+                key_findings=[
+                    DraftFinding(
+                        statement="The financial value was reported.",
+                        claim_type="fact",
+                        confidence=2,
+                        evidence_ids=[financial_id],
+                    )
+                ],
+                outlook="Monitor the evidence.",
+            )
+            return SimpleNamespace(
+                result=SimpleNamespace(output=draft, usage=FakeUsage()),
+                evidence_catalog={
+                    **kwargs["evidence_catalog"],
+                    passage.evidence_id: passage,
+                },
+                financial_sources=kwargs["financial_sources"],
+            )
+
+        async def web_judge(*_args):
+            return WebPassageJudgment(
+                evidence_id=passage.evidence_id,
+                model="fake",
+                relevance_probability=0.93,
+                novelty_probability=0.92,
+                usage={"input_tokens": 20},
+            )
+
+        async def suggest(*_args, **_kwargs):
+            return WebFindingSuggestion(
+                finding=DraftFinding(
+                    statement="Apple said supplier capacity expanded.",
+                    claim_type="fact",
+                    confidence=2,
+                    evidence_ids=[passage.evidence_id],
+                ),
+                reason="Distinct update",
+            )
+
+        async def grounded(*_args, **_kwargs):
+            return GroundingClassification(is_supported=True, reasoning="Supported")
+
+        async def narrative(*_args, **_kwargs):
+            return BriefingNarrative(
+                executive_summary="Financial and supplier updates were reported.",
+                outlook="Monitor the reported updates.",
+            )
+
+        close_data = [
+            {
+                "Date": (self.as_of - timedelta(days=2)).date().isoformat(),
+                "Close": 100.0,
+            },
+            {
+                "Date": (self.as_of - timedelta(days=1)).date().isoformat(),
+                "Close": 110.0,
+            },
+        ]
+        streamed = []
+        with (
+            patch.object(research, "classify_research_query", jev),
+            patch.object(research, "run_research_briefing_agent", agent),
+            patch.object(research, "judge_web_passage", web_judge),
+            patch.object(research, "suggest_web_finding", suggest),
+            patch.object(
+                research,
+                "get_company_snapshot",
+                return_value={"symbol": "AAPL", "company_name": "Apple Inc."},
+            ),
+            patch.object(research, "get_close_data", return_value=close_data),
+            patch.object(research, "validate_document_evidence", return_value=True),
+            patch.object(research, "validate_financial_evidence", return_value=True),
+            patch.object(research, "verify_finding", grounded),
+            patch.object(research, "synthesize_narrative", narrative),
+        ):
+            result = await research.run_research_workflow(
+                self.request, on_step=streamed.append
+            )
+            with patch.object(
+                research, "judge_web_passage", side_effect=TimeoutError("fake timeout")
+            ):
+                failed_review_result = await research.run_research_workflow(
+                    self.request.model_copy(
+                        update={"as_of": self.as_of + timedelta(seconds=1)}
+                    )
+                )
+
+            async def irrelevant_judgment(*_args):
+                return WebPassageJudgment(
+                    evidence_id=passage.evidence_id,
+                    model="fake",
+                    relevance_probability=0.1,
+                    novelty_probability=0.1,
+                    usage={"input_tokens": 12},
+                )
+
+            with (
+                patch.object(research, "judge_web_passage", irrelevant_judgment),
+                patch.object(research, "suggest_web_finding") as no_suggestion,
+            ):
+                irrelevant_result = await research.run_research_workflow(
+                    self.request.model_copy(
+                        update={"as_of": self.as_of + timedelta(seconds=2)}
+                    )
+                )
+                no_suggestion.assert_not_called()
+        self.assertEqual(result.status, ResearchRunStatus.COMPLETED)
+        self.assertTrue(
+            any(
+                passage.evidence_id in [e.evidence_id for e in finding.evidence]
+                for finding in result.briefing.key_findings
+            )
+        )
+        steps = saved_steps(result.run_id)
+        self.assertEqual(
+            [step.sequence for step in steps], list(range(1, len(steps) + 1))
+        )
+        self.assertEqual(len(streamed), len(steps))
+        decision = next(
+            step
+            for step in steps
+            if step.summary == "Final web source dispositions recorded"
+        )
+        self.assertEqual(decision.details["decisions"][0]["outcome"], "cited")
+        self.assertEqual(failed_review_result.status, ResearchRunStatus.COMPLETED)
+        failed_review_steps = saved_steps(failed_review_result.run_id)
+        failed_review_decision = next(
+            step
+            for step in failed_review_steps
+            if step.summary == "Final web source dispositions recorded"
+        )
+        self.assertEqual(
+            failed_review_decision.details["decisions"][0]["outcome"], "review_failed"
+        )
+        self.assertIn(
+            "TimeoutError", failed_review_decision.details["decisions"][0]["reason"]
+        )
+        irrelevant_decision = next(
+            step
+            for step in saved_steps(irrelevant_result.run_id)
+            if step.summary == "Final web source dispositions recorded"
+        )
+        self.assertEqual(
+            irrelevant_decision.details["decisions"][0]["outcome"], "excluded"
+        )
+        with self.get_session() as session:
+            self.assertTrue(
+                any(
+                    call["component"] == "web_jev"
+                    for call in session.get(ResearchRun, result.run_id).usage_payload[
+                        "calls"
+                    ]
+                )
+            )
+
     async def test_jev_rejection_stops_before_provider_prefetch(self) -> None:
-        async def reject(symbol, question):
+        async def reject(symbol, question, *, precheck):
             return ResearchQueryJevJudgment(
                 model="fake-jev",
                 question_version=1,
@@ -267,9 +490,40 @@ class ResearchRunLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(
                 any(step.details.get("outcome") == "reject" for step in steps)
             )
+            precheck_step = next(
+                step
+                for step in steps
+                if step.summary == "Deterministic query precheck passed"
+            )
+            jev_step = next(
+                step
+                for step in steps
+                if step.summary == "Jev relevance and instruction judgments requested"
+            )
+            self.assertLess(precheck_step.sequence, jev_step.sequence)
+
+    async def test_query_precheck_rejects_before_jev(self) -> None:
+        invalid = self.request.model_copy(update={"research_question": " " * 35})
+        with (
+            patch.object(research, "classify_research_query") as jev,
+            patch.object(research, "get_company_snapshot") as prefetch,
+            self.assertRaisesRegex(ValueError, "meaningful"),
+        ):
+            await research.run_research_workflow(invalid)
+        jev.assert_not_called()
+        prefetch.assert_not_called()
+        with self.get_session() as session:
+            run = session.query(ResearchRun).one()
+            steps = saved_steps(run.id)
+            self.assertTrue(
+                any(
+                    step.summary == "Deterministic query precheck rejected request"
+                    for step in steps
+                )
+            )
 
     async def test_jev_unavailable_uses_visible_fallback(self) -> None:
-        async def unavailable(symbol, question):
+        async def unavailable(symbol, question, *, precheck):
             raise TimeoutError("fake Jev timeout")
 
         async def fallback(symbol, question, run_id, *, on_usage):

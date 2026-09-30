@@ -22,6 +22,7 @@ from backend.research_workflow.agent.agent import (
 from backend.research_workflow.agent.classifiers import (
     revise_finding,
     run_query_classifier,
+    suggest_web_finding,
     synthesize_narrative,
     verify_finding,
 )
@@ -39,7 +40,9 @@ from backend.research_workflow.agent.jev_classifier import (
     REJECT_PROBABILITY,
     classify_research_query,
     decide_query_gate,
+    judge_web_passage,
 )
+from backend.research_workflow.agent.query_precheck import precheck_research_query
 from backend.research_workflow.contracts import (
     BriefingRequest,
     DocumentEvidence,
@@ -52,6 +55,7 @@ from backend.research_workflow.contracts import (
     ResearchBriefing,
     ResearchWorkflowResult,
     VerificationResult,
+    WebSourceDisposition,
 )
 from backend.research_workflow.data.market_data import (
     get_close_data,
@@ -60,6 +64,7 @@ from backend.research_workflow.data.market_data import (
 from backend.research_workflow.service.run_record import (
     ResearchRunRecorder,
     StepCallback,
+    saved_steps,
 )
 
 logger = logging.getLogger(__name__)
@@ -292,6 +297,7 @@ async def run_research_workflow(
     catalog: dict[str, EvidenceRecord] | None = None
     financial_sources: dict[str, object] | None = None
     resuming_from_checkpoint = False
+    review_results: list[dict[str, object]] = []
     try:
         fingerprint = create_fingerprint(request)
         async with RESEARCH_SEMAPHORE, asyncio.timeout(180):
@@ -466,12 +472,22 @@ async def run_research_workflow(
                         ],
                     },
                 )
-                if request.as_of > now:
-                    raise ValueError(f"{request.as_of} cannot be after today")
-                if len(request.research_question) < 30:
-                    raise ValueError(
-                        f"{request.research_question} does not meet length requirements!"
+                try:
+                    precheck = precheck_research_query(request, now=now)
+                except ValueError as exc:
+                    recorder.emit(
+                        "classifier",
+                        "failed",
+                        "Deterministic query precheck rejected request",
+                        {"reason": str(exc)},
                     )
+                    raise
+                recorder.emit(
+                    "classifier",
+                    "completed",
+                    "Deterministic query precheck passed",
+                    precheck.model_dump(mode="json"),
+                )
 
                 recorder.emit(
                     "classifier",
@@ -498,7 +514,9 @@ async def run_research_workflow(
                 query_classification: QueryClassification | None = None
                 try:
                     judgment = await classify_research_query(
-                        request.symbol, request.research_question
+                        precheck.symbol,
+                        precheck.normalized_question,
+                        precheck=precheck,
                     )
                     decision = decide_query_gate(judgment)
                     record_usage("query_jev", judgment.usage)
@@ -533,7 +551,7 @@ async def run_research_workflow(
                     )
                     query_classification = await run_query_classifier(
                         request.symbol,
-                        request.research_question,
+                        precheck.normalized_question,
                         run_id,
                         on_usage=record_usage,
                     )
@@ -642,6 +660,72 @@ async def run_research_workflow(
                 catalog = execution.evidence_catalog
                 financial_sources = execution.financial_sources
 
+                cited_draft_ids = {
+                    evidence_id
+                    for finding in draft.key_findings
+                    for evidence_id in finding.evidence_ids
+                }
+                web_candidates = [
+                    item
+                    for item in catalog.values()
+                    if isinstance(item, DocumentEvidence)
+                    and item.reference_id.startswith("tavily:")
+                    and item.evidence_id not in cited_draft_ids
+                ]
+                suggestion_attempted = False
+                for passage in web_candidates[:3]:
+                    try:
+                        judgment = await judge_web_passage(
+                            request.research_question,
+                            [item.statement for item in draft.key_findings],
+                            passage,
+                        )
+                        record_usage("web_jev", judgment.usage)
+                        review = judgment.model_dump(mode="json")
+                        review["reason"] = "No distinct relevant fact found."
+                        if (
+                            judgment.relevance_probability >= 0.8
+                            and judgment.novelty_probability >= 0.8
+                            and not suggestion_attempted
+                        ):
+                            suggestion_attempted = True
+                            suggestion = await suggest_web_finding(
+                                request.research_question,
+                                draft.key_findings,
+                                passage,
+                                run_id,
+                                on_usage=record_usage,
+                            )
+                            proposed = suggestion.finding
+                            if proposed and proposed.evidence_ids == [
+                                passage.evidence_id
+                            ]:
+                                draft.key_findings.append(proposed)
+                                review["reason"] = (
+                                    "Distinct finding proposed; pending evidence checks."
+                                )
+                            else:
+                                review["reason"] = suggestion.reason
+                        review_results.append(review)
+                    except Exception as exc:  # noqa: BLE001 - web review is noncritical
+                        review_results.append(
+                            {
+                                "evidence_id": passage.evidence_id,
+                                "reason": f"Web review unavailable: {type(exc).__name__}",
+                            }
+                        )
+                recorder.emit(
+                    "verification",
+                    "completed",
+                    "Inspected web passages reviewed for coverage",
+                    {
+                        "decisions": review_results,
+                        "reviewed_count": len(review_results),
+                        "unreviewed_count": max(0, len(web_candidates) - 3),
+                        "repair_attempted": suggestion_attempted,
+                    },
+                )
+
                 with db_utils.get_session() as session:
                     research_run = session.get(ResearchRun, run_id)
                     if research_run is None:
@@ -683,6 +767,15 @@ async def run_research_workflow(
                 or recorder is None
             ):
                 raise RuntimeError("Research workflow state is incomplete")
+
+            if resuming_from_checkpoint:
+                review_results = [
+                    item
+                    for step in saved_steps(checkpointed_run.id)
+                    if step.summary == "Inspected web passages reviewed for coverage"
+                    for item in step.details.get("decisions", [])
+                    if isinstance(item, dict)
+                ]
 
             recorder.emit(
                 "verification",
@@ -938,6 +1031,59 @@ async def run_research_workflow(
                 raise RuntimeError("No grounded findings remained after verification")
 
             briefing.key_findings = verified_findings
+            cited_final_ids = {
+                evidence.evidence_id
+                for finding in verified_findings
+                for evidence in finding.evidence
+            }
+            review_by_id = {
+                str(item.get("evidence_id")): item for item in review_results
+            }
+            web_dispositions = []
+            for item in catalog.values():
+                if not isinstance(
+                    item, DocumentEvidence
+                ) or not item.reference_id.startswith("tavily:"):
+                    continue
+                review = review_by_id.get(item.evidence_id, {})
+                cited = item.evidence_id in cited_final_ids
+                web_dispositions.append(
+                    WebSourceDisposition(
+                        evidence_id=item.evidence_id,
+                        title=item.title,
+                        url=item.url,
+                        outcome=(
+                            "cited"
+                            if cited
+                            else "review_failed"
+                            if str(review.get("reason", "")).startswith(
+                                "Web review unavailable:"
+                            )
+                            else "excluded"
+                        ),
+                        reason=(
+                            "Cited by a verified final finding."
+                            if cited
+                            else (
+                                "Proposed web finding did not pass final evidence checks."
+                                if review.get("reason")
+                                == "Distinct finding proposed; pending evidence checks."
+                                else str(
+                                    review.get("reason")
+                                    or "Not selected within bounded web review."
+                                )
+                            )
+                        ),
+                        relevance_probability=review.get("relevance_probability"),
+                        novelty_probability=review.get("novelty_probability"),
+                    ).model_dump(mode="json")
+                )
+            recorder.emit(
+                "verification",
+                "completed",
+                "Final web source dispositions recorded",
+                {"decisions": web_dispositions},
+            )
             all_evidence = list(
                 {
                     evidence.evidence_id: evidence
@@ -1029,11 +1175,31 @@ async def run_research_workflow(
             briefing.limitations = list(
                 dict.fromkeys(
                     [
-                        *briefing.limitations,
-                        "Document searches expose at most three ranked passages per tool call.",
-                        "Web publication times are provider estimates; extracted pages reflect retrieval-time content.",
-                        "Current Yahoo snapshot fields are used only for company identity, not cited as historical financial evidence.",
-                        "Daily close prices on the as-of date are excluded because their intraday availability is unknown.",
+                        *[
+                            note
+                            for note in briefing.limitations
+                            if not (
+                                any(
+                                    term in note.lower()
+                                    for term in (
+                                        "reporting",
+                                        "web",
+                                        "news",
+                                        "article",
+                                        "tavily",
+                                    )
+                                )
+                                and any(
+                                    term in note.lower()
+                                    for term in (
+                                        "relies",
+                                        "based on",
+                                        "supported by",
+                                        "draws on",
+                                    )
+                                )
+                            )
+                        ],
                     ]
                 )
             )

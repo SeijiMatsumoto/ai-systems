@@ -195,6 +195,40 @@ class EvidenceCatalogTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].reference_id, "article-1")
 
+    def test_inspected_article_can_expose_two_distinct_exact_passages(self) -> None:
+        body = (
+            "Apple reported a supply constraint that delayed product shipments.\n\n"
+            "A supplier later expanded capacity, easing the shipment constraint.\n\n"
+            "Unrelated sports coverage appeared elsewhere on the page."
+        )
+        rows = [
+            {
+                "chunk_id": "chunk-1",
+                "reference_id": "tavily:one",
+                "chunk_index": 0,
+                "document_id": "document-1",
+                "document_type": "article",
+                "content": body,
+                "content_quality": "full_text",
+                "similarity": 0.5,
+                "title": "Apple supply update",
+                "source_url": "https://example.com/update",
+                "published_at": None,
+            }
+        ]
+        candidates = build_document_evidence_candidates(
+            "Apple supplier shipment constraint",
+            rows,
+            max_candidates=2,
+            require_term_overlap=True,
+        )
+        self.assertEqual(len(candidates), 2)
+        self.assertNotEqual(candidates[0].quote, candidates[1].quote)
+        for candidate in candidates:
+            self.assertEqual(
+                body[candidate.start_char : candidate.end_char], candidate.quote
+            )
+
     def test_financial_candidates_keep_resolvable_field_paths(self) -> None:
         data = {"valuation": {"forward_pe": 21.5}, "prices": [{"close": 200.0}]}
 

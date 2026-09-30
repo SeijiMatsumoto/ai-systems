@@ -86,7 +86,7 @@ evaluation; backend replay and saved workflow still retain the full fixture.
 The frontend allocates a UUID on click, selects it in the saved-run control, and
 passes it to the simulation stream; the backend uses that UUID for `llm_runs` and
 the saved output. A prominent current-task line follows the latest streamed stage.
-The collapsible React Flow diagram shows component boundaries.
+The page-header System architecture button opens the React Flow component-boundary diagram in a large modal.
 Simulation reports and workflow steps are saved in `incident_simulation_outputs`
 and can be reopened from the frontend. Migration 005 was applied to this
 checkout's configured Neon database on 2026-09-29. The older v1 alert API is
@@ -96,4 +96,8 @@ calibration, report approval has no reviewer identity or authorization, and the
 report's cause remains a hypothesis until an engineer verifies it. Do not
 describe these demo boundaries as production guarantees.
 
-Follow-up after incident work: connect `backend/research_workflow/` to `llm_runs` so its existing research runs can be found in the shared registry. Preserve research-specific payloads and behavior during that migration.
+Completed follow-up after incident work: `backend/research_workflow/` uses `llm_runs` so research attempts can be found in the shared registry. Research-specific payloads and behavior were preserved.
+
+UI polish completed: the Run view shares a compact scrolling task trail with the research demo. New tasks move earlier labels upward and fade them; the visible simulation ID labels were removed while the URL and internal IDs remain. Frontend build, lint, tests, and saved-run browser inspection passed.
+
+Architecture UI follow-up completed: all five system pages use a page-header architecture button and large modal. The incident diagram fits the modal viewport; the three scaffold pages show proposed diagrams. Frontend checks and browser inspection passed.

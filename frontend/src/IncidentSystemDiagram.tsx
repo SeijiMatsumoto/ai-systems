@@ -103,13 +103,9 @@ export default function IncidentSystemDiagram() {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onInit={(instance) => {
-          void instance.fitView({ padding: 0.02 }).then(() => {
-            const viewport = instance.getViewport()
-            void instance.setViewport({ ...viewport, x: 28 })
-          })
-        }}
-        minZoom={0.45}
+        fitView
+        fitViewOptions={{ padding: 0.08 }}
+        minZoom={0.3}
         maxZoom={1.6}
         nodesDraggable={false}
         nodesConnectable={false}

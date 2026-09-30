@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { backfillCompany, getResearchRun, getResearchRuns, streamResearch } from './api'
 import IncidentWorkspace from './IncidentWorkspace'
+import ArchitectureModal from './ArchitectureModal'
 import ResearchRunView from './ResearchRunView'
-import { researchTabFromUrl, withResearchRun } from './researchRunUi'
+import { citationKeyword, sourceCount, visibleResearchLimitations } from './researchReportUi'
+import { currentResearchRequest, researchSourceUse, researchTabFromUrl, withResearchRun } from './researchRunUi'
 import type { ResearchTab } from './researchRunUi'
 import type {
   BackfillRequest,
@@ -145,23 +147,11 @@ function toolFromLocation(): ToolDefinition | null {
   return TOOLS.find((tool) => tool.id === toolId) ?? null
 }
 
-function localDateTimeValue(): string {
-  const date = new Date(Date.now() - 60_000)
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 16)
-}
-
-function localDateTimeFromIso(value: string): string {
-  const date = new Date(value)
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 16)
-}
-
 const DEFAULT_RESEARCH_REQUEST: BriefingRequest = {
   symbol: 'AAPL',
-  as_of: localDateTimeValue(),
+  as_of: new Date().toISOString(),
   research_question:
-    "What are Apple's primary business risks, and which are most consequential for investors over the next 12 months?",
+    "How have Apple's revenue and profits changed over the past two years, and do its latest filing risks or recent news change the 12-month outlook?",
   audience: 'investors',
   time_horizon: '12m',
 }
@@ -193,7 +183,7 @@ function StatusPill({ status }: { status: string }) {
   return <span className={`status-pill status-${normalized}`}>{status}</span>
 }
 
-function AppHeader({ onHome }: { onHome: () => void }) {
+function AppHeader({ onHome, selectedTool, onArchitecture }: { onHome: () => void; selectedTool: ToolDefinition | null; onArchitecture: () => void }) {
   return (
     <header className="app-header">
       <button className="brand-button" type="button" onClick={onHome}>
@@ -203,9 +193,11 @@ function AppHeader({ onHome }: { onHome: () => void }) {
           <small>Applied agent engineering</small>
         </span>
       </button>
-      <div className="header-meta">
-        <span className="live-indicator" aria-hidden="true" />
-        Local workspace
+      <div className="header-actions">
+        <div className="header-meta"><span className="live-indicator" aria-hidden="true" />Local workspace</div>
+        {selectedTool && <button className="architecture-entry" type="button" onClick={onArchitecture} aria-haspopup="dialog">
+          <span aria-hidden="true">▦</span> System architecture
+        </button>}
       </div>
     </header>
   )
@@ -356,14 +348,6 @@ function ResearchForm({
           />
         </label>
         <label>
-          <span>As of</span>
-          <input
-            type="datetime-local"
-            value={request.as_of}
-            onChange={(event) => setField('as_of', event.target.value)}
-          />
-        </label>
-        <label>
           <span>Audience</span>
           <select
             value={request.audience}
@@ -407,7 +391,7 @@ function ResearchForm({
   )
 }
 
-function EvidenceDisclosure({ evidence }: { evidence: EvidenceItem }) {
+function CitationChip({ evidence }: { evidence: EvidenceItem }) {
   const isVersionTwo = 'evidence_id' in evidence
   const content = isVersionTwo
     ? evidence.evidence_type === 'document'
@@ -417,42 +401,20 @@ function EvidenceDisclosure({ evidence }: { evidence: EvidenceItem }) {
   const sourceLabel = isVersionTwo
     ? evidence.title
     : evidence.title || evidence.source
-  const chunkId =
-    evidence.evidence_type === 'document' && 'chunk_id' in evidence
-      ? evidence.chunk_id
-      : null
-  const fieldPath =
-    evidence.evidence_type === 'financial' && 'field_path' in evidence
-      ? evidence.field_path
-      : null
-
   return (
-    <details className="evidence-item">
-      <summary>
-        <span>
-          <strong>{sourceLabel}</strong>
-          <small>
-            {isVersionTwo && evidence.evidence_type === 'document'
-              ? `${evidence.document_type} · ${evidence.content_quality}`
-              : evidence.evidence_type}{' '}
-            · {evidence.reference_id}
-          </small>
-        </span>
-        <span className="disclosure-label">Evidence</span>
-      </summary>
-      <blockquote>{String(content)}</blockquote>
-      <div className="evidence-meta">
-        {evidence.published_at && <span>Published {formatDate(evidence.published_at)}</span>}
-        {chunkId && <code>chunk {chunkId}</code>}
-        {fieldPath && <code>{fieldPath}</code>}
-        {'period_end' in evidence && evidence.period_end && (
-          <span>Period ended {formatDate(evidence.period_end)}</span>
-        )}
-        {evidence.url && (
-          <a href={evidence.url} rel="noreferrer" target="_blank">
-            Open source
-          </a>
-        )}
+    <details className="citation-chip">
+      <summary>{citationKeyword(evidence)}</summary>
+      <div className="citation-tooltip">
+        <strong>{sourceLabel}</strong>
+        <blockquote>{typeof content === 'number' ? content.toLocaleString('en-US') : String(content)}</blockquote>
+        <div className="citation-tooltip-meta">
+          {'period_end' in evidence && evidence.period_end && <span>Period ended {formatDate(evidence.period_end)}</span>}
+          {evidence.published_at && <span>Published {formatDate(evidence.published_at)}</span>}
+          {'field_path' in evidence && evidence.field_path && <code>{evidence.field_path}</code>}
+          {'chunk_id' in evidence && evidence.chunk_id && <code>Chunk {evidence.chunk_id}</code>}
+          <code>{evidence.reference_id}</code>
+          {evidence.url && <a href={evidence.url} target="_blank" rel="noreferrer">Open source ↗</a>}
+        </div>
       </div>
     </details>
   )
@@ -480,22 +442,16 @@ function FindingCard({
         <div className="finding-tags">
           <span>{finding.claim_type}</span>
           <span>{confidenceLabel(finding.confidence)}</span>
-          <span>{finding.evidence.length} sources</span>
+          <span>{sourceCount(finding.evidence)} source{sourceCount(finding.evidence) === 1 ? '' : 's'}</span>
+          {finding.evidence.map((evidence, evidenceIndex) => (
+            <CitationChip
+              evidence={evidence}
+              key={'evidence_id' in evidence ? evidence.evidence_id : `${evidence.reference_id}-${evidence.chunk_id ?? evidence.field_path ?? evidenceIndex}`}
+            />
+          ))}
           {!isSupported && <span className="finding-warning">Needs review</span>}
         </div>
         <h3>{finding.statement}</h3>
-        <div className="evidence-list">
-          {finding.evidence.map((evidence, evidenceIndex) => (
-            <EvidenceDisclosure
-              evidence={evidence}
-              key={
-                'evidence_id' in evidence
-                  ? evidence.evidence_id
-                  : `${evidence.reference_id}-${evidence.chunk_id ?? evidence.field_path ?? evidenceIndex}`
-              }
-            />
-          ))}
-        </div>
       </div>
     </article>
   )
@@ -506,17 +462,44 @@ function BriefingView({
   symbol,
   asOf,
   timeHorizon,
+  steps,
 }: {
   result: ResearchWorkflowResult
   symbol: string
   asOf: string
   timeHorizon: string
+  steps: ResearchWorkflowStep[]
 }) {
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent | FocusEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      document.querySelectorAll<HTMLDetailsElement>('.citation-chip[open]').forEach((chip) => {
+        if (!chip.contains(target)) chip.open = false
+      })
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      document.querySelectorAll<HTMLDetailsElement>('.citation-chip[open]').forEach((chip) => {
+        chip.open = false
+        if (chip.contains(document.activeElement)) (document.activeElement as HTMLElement).blur()
+      })
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('focusin', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('focusin', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [])
+
   if (!result.briefing) {
     return (
       <div className="empty-state">
         <strong>Run accepted</strong>
-        <p>The workflow is currently {result.status}. Run ID: {result.run_id}</p>
+        <p>The workflow is currently {result.status}. Open the Run tab for progress.</p>
       </div>
     )
   }
@@ -529,6 +512,8 @@ function BriefingView({
     (total, finding) => total + finding.evidence.length,
     0,
   )
+  const sourceUse = researchSourceUse(steps, result.briefing)
+  const limitations = visibleResearchLimitations(result.briefing.limitations)
 
   return (
     <div className="briefing-view">
@@ -561,6 +546,29 @@ function BriefingView({
           </dl>
         </header>
 
+        {sourceUse.tavilySearches > 0 && (
+          <section className="research-source-use" aria-label="Tavily source use">
+            <strong>Tavily source use</strong>
+            <p>
+              {sourceUse.tavilySearches} search{sourceUse.tavilySearches === 1 ? '' : 'es'} ·{' '}
+              {sourceUse.inspectedCandidates} citable passage{sourceUse.inspectedCandidates === 1 ? '' : 's'} inspected ·{' '}
+              {sourceUse.citedTavilyEvidence} cited in the final findings.
+            </p>
+            {sourceUse.citedTavilyEvidence === 0 && <p>No Tavily passage supports a final finding. See the Run tab for the search, extraction, and source decisions.</p>}
+            {sourceUse.citedTavilyEvidence > 0 && <p className="source-context-note">Web publication dates are provider estimates. Cited page text reflects what was retrieved for this run.</p>}
+            {sourceUse.dispositions.length > 0 && (
+              <details>
+                <summary>Source decisions</summary>
+                <ul>
+                  {sourceUse.dispositions.map((decision) => (
+                    <li key={decision.evidence_id}><strong>{decision.outcome}</strong> · {decision.url ? <a href={decision.url} target="_blank" rel="noreferrer">{decision.title || decision.evidence_id}</a> : decision.title || decision.evidence_id}: {decision.reason}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
+        )}
+
         <section className="briefing-summary">
           <h2>Investment summary</h2>
           <p>{result.briefing.executive_summary}</p>
@@ -591,11 +599,11 @@ function BriefingView({
           <p>{result.briefing.outlook}</p>
         </section>
 
-        {result.briefing.limitations.length > 0 && (
+        {limitations.length > 0 && (
           <section className="limitations-section">
             <h2>Research limitations</h2>
             <ul>
-              {result.briefing.limitations.map((limitation) => (
+              {limitations.map((limitation) => (
                 <li key={limitation}>{limitation}</li>
               ))}
             </ul>
@@ -609,7 +617,6 @@ function BriefingView({
               Tavily
             </a>
           </span>
-          <code>{result.run_id}</code>
         </footer>
       </article>
     </div>
@@ -711,10 +718,6 @@ function AdminView({
         ) : (
           <>
             <div className="diagnostic-grid">
-              <div>
-                <span>Run ID</span>
-                <code>{run.run_id}</code>
-              </div>
               <div>
                 <span>Checkpoint</span>
                 <strong>{run.checkpoint_stage ?? 'None'}</strong>
@@ -911,10 +914,7 @@ function ResearchWorkspace() {
       const savedRun = await getResearchRun(runId)
       if (requestId !== selectionRequest.current) return
       applyRunDetail(savedRun)
-      setRequest({
-        ...savedRun.request_payload,
-        as_of: localDateTimeFromIso(savedRun.request_payload.as_of),
-      })
+      setRequest(savedRun.request_payload)
       if (savedRun.status === 'pending' || savedRun.status === 'running') {
         setActiveTab('run')
         setLoading(true)
@@ -977,11 +977,8 @@ function ResearchWorkspace() {
     setActiveTab('run')
     updateRunUrl(null, 'run')
     try {
-      const normalizedRequest: BriefingRequest = {
-        ...request,
-        symbol: request.symbol.trim().toUpperCase(),
-        as_of: new Date(request.as_of).toISOString(),
-      }
+      const normalizedRequest = currentResearchRequest(request)
+      setRequest(normalizedRequest)
       const nextWorkflow = await streamResearch(normalizedRequest, (step) => {
         if (requestId !== selectionRequest.current) return
         if (!streamRunId) {
@@ -1047,6 +1044,7 @@ function ResearchWorkspace() {
     setActiveTab('run')
     setError(null)
     setLoading(false)
+    setRequest({ ...DEFAULT_RESEARCH_REQUEST, as_of: new Date().toISOString() })
   }
 
   return (
@@ -1091,7 +1089,7 @@ function ResearchWorkspace() {
               <ResearchRunView steps={runDetail?.workflow_steps ?? liveSteps} runId={currentRunId} resumedFrom={runDetail?.resumed_from_run_id ?? null} loading={loading} status={runDetail?.status ?? workflow?.status ?? null} error={error} />
             </section>
             <section role="tabpanel" aria-label="Research briefing" hidden={activeTab !== 'briefing'}>
-              {workflow?.briefing && <BriefingView result={workflow} symbol={runDetail?.symbol ?? request.symbol} asOf={runDetail?.as_of ?? request.as_of} timeHorizon={request.time_horizon} />}
+              {workflow?.briefing && <BriefingView result={workflow} symbol={runDetail?.symbol ?? request.symbol} asOf={runDetail?.as_of ?? request.as_of} timeHorizon={request.time_horizon} steps={runDetail?.workflow_steps ?? liveSteps} />}
             </section>
           </>}
           {!loading && mode === 'admin' && <AdminView workflow={workflow} run={runDetail} />}
@@ -1111,9 +1109,10 @@ function ResearchWorkspace() {
 
 export default function App() {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(toolFromLocation)
+  const [architectureOpen, setArchitectureOpen] = useState(false)
 
   useEffect(() => {
-    const handleNavigation = () => setSelectedTool(toolFromLocation())
+    const handleNavigation = () => { setSelectedTool(toolFromLocation()); setArchitectureOpen(false) }
     window.addEventListener('popstate', handleNavigation)
     return () => window.removeEventListener('popstate', handleNavigation)
   }, [])
@@ -1128,11 +1127,13 @@ export default function App() {
     else url.searchParams.delete('tab')
     window.history.pushState({}, '', url)
     setSelectedTool(tool)
+    setArchitectureOpen(false)
   }
 
   return (
     <div className="app-shell">
-      <AppHeader onHome={() => navigateToTool(null)} />
+      <AppHeader onHome={() => navigateToTool(null)} selectedTool={selectedTool} onArchitecture={() => setArchitectureOpen(true)} />
+      {selectedTool && architectureOpen && <ArchitectureModal systemId={selectedTool.id} title={selectedTool.title} availability={selectedTool.availability} onClose={() => setArchitectureOpen(false)} />}
       <div className="app-frame">
         <ToolRail selectedId={selectedTool?.id ?? null} onSelect={navigateToTool} />
         <main className="workspace-canvas">

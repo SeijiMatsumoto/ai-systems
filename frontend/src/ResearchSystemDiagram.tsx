@@ -1,51 +1,57 @@
-function Box({ x, y, category, title, detail, tone = 'default', width = 160 }: {
+function Box({ x, y, category, title, detail, tone = 'default' }: {
   x: number
   y: number
   category: string
   title: string
   detail: string
-  tone?: 'default' | 'model' | 'store'
-  width?: number
+  tone?: 'default' | 'model' | 'store' | 'gate'
 }) {
   return (
     <g className={`research-map-box research-map-box-${tone}`}>
-      <rect x={x} y={y} width={width} height={80} rx="9" />
+      <rect x={x} y={y} width={160} height={84} rx="9" />
       <text x={x + 12} y={y + 20} className="research-map-category">{category}</text>
       <text x={x + 12} y={y + 42} className="research-map-title">{title}</text>
-      <text x={x + 12} y={y + 62} className="research-map-detail">{detail}</text>
+      <text x={x + 12} y={y + 64} className="research-map-detail">{detail}</text>
     </g>
   )
 }
 
 export default function ResearchSystemDiagram() {
   return (
-    <div className="research-system-diagram" role="region" aria-label="Research architecture diagram. A Jev request gate precedes a bounded single agent. The agent loops through scoped filing, financial, and Tavily tools. Application code verifies citations and saves the briefing with ordered run steps.">
-      <svg viewBox="0 0 920 335" aria-hidden="true">
+    <div className="research-system-diagram" role="region" aria-label="Research architecture diagram. A deterministic query precheck runs before Jev. Application thresholds decide accept, reject, or fallback. The bounded agent calls scoped tools, source filters return evidence to the agent, and the agent can repeat this loop before drafting. Only the draft proceeds to citation provenance and grounding checks. Ordered steps and the briefing are persisted before streaming.">
+      <svg viewBox="0 0 1480 365" aria-hidden="true">
         <defs>
           <marker id="research-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" /></marker>
+          <marker id="research-loop-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#5b7799" /></marker>
         </defs>
         <g className="research-map-edges" markerEnd="url(#research-arrow)">
-          <path d="M170 66 H191" />
-          <path d="M355 66 H376" />
-          <path d="M540 66 H561" />
-          <path d="M725 66 H746" />
-          <path d="M418 108 V210" />
-          <path d="M499 210 V108" />
-          <path d="M645 108 V210" />
-          <path d="M270 108 V210" />
+          {[170, 355, 540, 725, 910, 1095, 1280].map((x) => <path key={x} d={`M${x} 72 H${x + 21}`} />)}
+          <path d="M640 114 V226" />
+          <path d="M1195 114 V226" />
+          <path d="M1380 114 V226" />
         </g>
-        <Box x={10} y={26} category="INPUT" title="Research request" detail="Company · question · as-of" />
-        <Box x={195} y={26} category="MODEL · JEV" title="Request gate" detail="Typed yes/no decisions" tone="model" />
-        <Box x={380} y={26} category="MODEL · AGENT" title="Research agent" detail="Choose source or draft" tone="model" />
-        <Box x={565} y={26} category="APPLICATION" title="Evidence checks" detail="Resolve IDs · ground · repair" />
-        <Box x={750} y={26} category="OUTPUT" title="Cited briefing" detail="Findings · limits · evidence" />
-        <Box x={380} y={215} category="SCOPED TOOLS" title="Source selection" detail="Filings · Yahoo · Tavily" />
-        <Box x={565} y={215} category="PERSISTENCE" title="Run and steps" detail="llm_runs · research_runs" tone="store" />
-        <Box x={195} y={215} category="GATE OUTCOME" title="Reject or fallback" detail="Application thresholds" tone="store" />
-        <text x="394" y="165" className="research-map-edge-label">query ↓</text>
-        <text x="486" y="165" className="research-map-edge-label">↑ evidence</text>
-        <text x="652" y="165" className="research-map-edge-label">save</text>
-        <text x="16" y="316" className="research-map-footnote">Research steps are persisted before streaming. Logfire can supplement the walkthrough when tracing is enabled.</text>
+        <g className="research-map-loop" markerEnd="url(#research-loop-arrow)">
+          <path d="M805 114 V226" />
+          <path d="M910 272 H931" />
+          <path d="M1010 230 V164 H865 V118" />
+        </g>
+        <Box x={10} y={30} category="TYPED INPUT" title="Research request" detail="Company · question · run cutoff" />
+        <Box x={195} y={30} category="DETERMINISTIC" title="Query precheck" detail="Normalize · keywords · reject" tone="gate" />
+        <Box x={380} y={30} category="MODEL · JEV" title="Request judgment" detail="Relevance · instruction risk" tone="model" />
+        <Box x={565} y={30} category="APP DECISION" title="After Jev" detail="Threshold · reject · fallback" tone="gate" />
+        <Box x={750} y={30} category="MODEL · AGENT" title="Research agent" detail="Choose source or draft" tone="model" />
+        <Box x={935} y={30} category="CITATION PRECHECK" title="Provenance checks" detail="IDs · scope · exact locators" tone="gate" />
+        <Box x={1120} y={30} category="MODEL CLASSIFIER" title="Grounding judgment" detail="Claim vs verified evidence" tone="model" />
+        <Box x={1305} y={30} category="OUTPUT" title="Cited briefing" detail="Retained findings · limits" />
+        <Box x={565} y={230} category="APP BRANCH" title="Reject or fallback" detail="Classifier if Jev uncertain" tone="store" />
+        <Box x={750} y={230} category="SCOPED TOOLS" title="Source selection" detail="Filings · Yahoo · Tavily" />
+        <Box x={935} y={230} category="DETERMINISTIC" title="Source filters" detail="Date · company · selected URLs" tone="gate" />
+        <Box x={1120} y={230} category="APP DECISION" title="Repair or exclude" detail="Rebuild from retained findings" tone="gate" />
+        <Box x={1305} y={230} category="PERSISTENCE" title="Run and steps" detail="Save before SSE stream" tone="store" />
+        <text x="748" y="174" className="research-map-edge-label">tool calls ↓</text>
+        <text x="877" y="152" className="research-map-edge-label">filtered evidence ↰</text>
+        <text x="1132" y="174" className="research-map-edge-label">unsupported ↓</text>
+        <text x="16" y="350" className="research-map-footnote">The agent can repeat the tool loop before drafting. Keyword signals inform Jev; application code owns the decisions and citation checks.</text>
       </svg>
     </div>
   )

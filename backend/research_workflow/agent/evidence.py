@@ -149,7 +149,8 @@ def build_document_evidence_candidates(
             )
 
     candidates: list[DocumentEvidence] = []
-    seen_article_stories: set[str] = set()
+    article_story_counts: dict[str, int] = {}
+    article_story_passages: set[tuple[str, str]] = set()
     for (
         relevance_score,
         row,
@@ -163,9 +164,15 @@ def build_document_evidence_candidates(
             continue
         if document_type == DocumentType.ARTICLE:
             normalized_story_key = story_key(str(row["title"]))
-            if normalized_story_key in seen_article_stories:
+            passage_key = (normalized_story_key, " ".join(quote.lower().split()))
+            if passage_key in article_story_passages:
                 continue
-            seen_article_stories.add(normalized_story_key)
+            if article_story_counts.get(normalized_story_key, 0) >= 2:
+                continue
+            article_story_passages.add(passage_key)
+            article_story_counts[normalized_story_key] = (
+                article_story_counts.get(normalized_story_key, 0) + 1
+            )
         raw_content_quality = row.get("content_quality")
         content_quality = (
             raw_content_quality

@@ -37,6 +37,14 @@ class BriefingRequest(BaseModel):
         return value
 
 
+class ResearchQueryPrecheck(BaseModel):
+    symbol: str
+    normalized_question: str
+    symbol_mentioned: bool
+    topic_matches: list[str]
+    instruction_pattern_matches: list[str]
+
+
 class SearchDocumentsInput(BaseModel):
     query: str = Field(min_length=1, max_length=300)
     document_type: Literal[DocumentType.FILING, DocumentType.GENERIC]
@@ -108,6 +116,24 @@ class ResearchQueryGateDecision(BaseModel):
     outcome: Literal["accept", "reject", "fallback"]
     reason: str
     judgment: ResearchQueryJevJudgment
+
+
+class WebPassageJudgment(BaseModel):
+    evidence_id: str
+    model: str
+    relevance_probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    novelty_probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    usage: dict[str, int]
+
+
+class WebSourceDisposition(BaseModel):
+    evidence_id: str
+    title: str
+    url: str | None = None
+    outcome: Literal["cited", "excluded", "review_failed"]
+    reason: str
+    relevance_probability: float | None = None
+    novelty_probability: float | None = None
 
 
 class GroundingClassification(BaseModel):
@@ -201,6 +227,11 @@ class DraftFinding(BaseModel):
     claim_type: ClaimType
     confidence: int = Field(ge=1, le=3)
     evidence_ids: list[str] = Field(min_length=1)
+
+
+class WebFindingSuggestion(BaseModel):
+    finding: DraftFinding | None = None
+    reason: str = Field(min_length=1, max_length=240)
 
 
 class DraftResearchBriefing(BaseModel):

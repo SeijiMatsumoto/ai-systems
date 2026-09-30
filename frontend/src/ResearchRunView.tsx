@@ -1,15 +1,13 @@
-import { lazy, Suspense, useState } from 'react'
-
 import { researchCurrentTask } from './researchRunUi'
+import TaskScroll from './TaskScroll'
+import { taskTrail } from './taskTrail'
 import type { ResearchRunStatus, ResearchWorkflowStep } from './types'
-
-const ResearchSystemDiagram = lazy(() => import('./ResearchSystemDiagram'))
 
 type Stage = ResearchWorkflowStep['stage']
 
 const STAGES: Array<{ title: string; stages: Stage[]; description: string }> = [
   { title: 'Request and scope', stages: ['run', 'scope'], description: 'The question, cutoff time, and source boundaries' },
-  { title: 'Request decision', stages: ['classifier'], description: 'Jev probabilities, application gate, and any fallback' },
+  { title: 'Request decision', stages: ['classifier'], description: 'Deterministic query precheck, Jev judgment, application gate, and fallback' },
   { title: 'Source preparation', stages: ['prefetch'], description: 'Company identity and prior-day price context' },
   { title: 'Research agent and tools', stages: ['agent', 'tool'], description: 'Model-visible input, selected tools, exact arguments, and results' },
   { title: 'Verification and persistence', stages: ['verification', 'checkpoint', 'persistence'], description: 'Evidence checks, repair, saved state, and stop reason' },
@@ -47,29 +45,21 @@ export default function ResearchRunView({
   status: ResearchRunStatus | null
   error: string | null
 }) {
-  const [architectureOpen, setArchitectureOpen] = useState(false)
   const current = steps.at(-1)
   const last = steps.findLast((step) => step.stage === 'persistence')
-  const task = loading ? researchCurrentTask(current) : last?.summary ?? (error ? 'Research run failed' : status === 'completed' ? 'Briefing saved' : 'Ready to research')
+  const outcome = loading ? undefined : last?.summary ?? (error ? 'Research run failed' : status === 'completed' ? 'Briefing saved' : 'Ready to research')
+  const trail = taskTrail(steps, researchCurrentTask, outcome)
+  if (!trail.length) trail.push({ key: 'ready', label: researchCurrentTask(current) })
 
   return (
     <div className="research-run-view">
       <section className="research-run-overview" aria-label="Research run status">
         <span className="section-kicker">Research walkthrough</span>
         <h2>What happened</h2>
-        <div className="research-current-task" role="status" aria-live="polite">
-          <span>{loading ? 'Current task' : 'Run outcome'}</span>
-          <strong>{task}</strong>
-          <small>{runId ? `Run ${runId}` : 'Run ID appears when the first step arrives'}</small>
-        </div>
-        {resumedFrom && <p className="research-run-note">This attempt resumed from failed run <code>{resumedFrom}</code>. Earlier steps remain with that run.</p>}
+        <TaskScroll items={trail} active={loading} />
+        {resumedFrom && <p className="research-run-note">This attempt resumed from a failed run. Earlier steps remain with that run.</p>}
         <p className="research-run-note">These are application-recorded inputs, decisions, tool calls, and checks. Model private reasoning and provider internals are unavailable.</p>
       </section>
-
-      <details className="research-architecture" onToggle={(event) => setArchitectureOpen(event.currentTarget.open)}>
-        <summary><span>System architecture</span><strong>Explore the research system design</strong><span aria-hidden="true">⌄</span></summary>
-        {architectureOpen && <Suspense fallback={<p className="research-run-note">Loading diagram…</p>}><ResearchSystemDiagram /></Suspense>}
-      </details>
 
       {!steps.length && <section className="research-run-overview"><p>{runId ? 'This saved run predates workflow-step recording.' : 'Submit a request to watch the workflow.'}</p></section>}
 

@@ -26,3 +26,27 @@ Offline verification also covers shared/domain lifecycle linkage, a saved failed
 ## Phase 3 review gate
 
 Offline research tests cover Jev adapter shape and usage, threshold and fallback branches, early rejection before provider prefetch, and a fake-model workflow. Frontend build, lint, and tests cover stream parsing and run navigation. A local mock API demonstrated streaming steps, completed Briefing navigation, and saved Run restoration in the browser. Ruff checks pass on the changed Python files. No live Jev, Tavily, OpenAI, or full research run was called for this phase. The broader interview outline's durable worker queue, generalized planner, parallel subtasks, and human review action remain future design extensions rather than implemented features.
+
+## First live run follow-up
+
+Run `7f7a19ba-a9df-4b15-9f3a-3e4e8226cb40` searched Tavily and inspected three citable web passages, then cited only four SEC filing passages. The model-authored limitation mentioned inspected reporting even though no web passage supported a retained finding. Keep the model free to prefer primary filings; do not force a web citation for coverage. The Briefing UI now derives searched, inspected, and cited Tavily counts from saved steps and final evidence, so source use is explicit without rewriting the saved report. The local port-5174 CORS fix was included in this follow-up.
+
+## Web coverage follow-up
+
+Each Research UI submission gets a fresh `as_of`; the form no longer offers a historical cutoff override. API clients can still provide one. Extraction can return two distinct exact passages per selected page. Jev reviews at most three uncited passages for relevance and novelty; one qualifying passage can prompt one proposed finding, which must pass the existing evidence checks. Final passage dispositions are persisted in steps and shown with the Briefing. The prompt and tool versions are 10. Offline tests cover exact passage offsets, the Jev adapter, a mocked multi-source run with streamed and saved decisions, and a web-review timeout. No paid full research run was used for this follow-up.
+
+The user selected a shorter investor-style default question. The Run tab now shows a compact scrolling task trail shared with the incident demo: new tasks move prior tasks upward and older labels fade. Visible run-ID labels were removed from the research workspace; the shareable URL and internal identifiers remain. Frontend build, lint, tests, and saved-run browser inspection passed.
+
+Key findings now show compact citation keywords beside the unique source count; hover, focus, or click reveals the exact cited value or passage, locator, and source link. The four generic backend limitations were removed from new briefings; old saved payloads remain intact, but the Briefing view hides those exact boilerplate sentences. The two fiscal-year and filing-date limits in the observed report were agent-authored and remain visible. The web timestamp caveat appears next to Tavily source use only when web evidence is cited. Offline checks and a saved-report browser inspection passed.
+
+Citation chips dismiss on outside pointer or focus and on Escape. This was checked in the saved Briefing browser view; no provider calls were made.
+
+Architecture UI follow-up: the research diagram moved from an inline Run disclosure into the shared page-header modal. All five system pages use the same entry point; the three scaffold diagrams are labeled proposed. Frontend checks and browser inspection passed.
+
+Diagram correction: the research diagram separates Jev's model judgment from the application's request threshold, tool/source limits, provenance checks, grounding judgment, repair/exclusion branch, and persisted run state. It does not depict Jev as the sole guardrail. Browser inspection and frontend checks passed.
+
+UI cutoff follow-up: the Research form no longer exposes an `as_of` control. Each UI submission uses a fresh timestamp with a one-minute clock-skew buffer, even after selecting a saved run. The backend retains explicit `as_of` for API clients, evidence scope, and saved-run provenance. The diagram names both model classifiers and explains why the citation existence/scope precheck precedes semantic grounding. Frontend checks and browser inspection passed; no provider call was made.
+
+Deterministic query precheck: before Jev or its fallback classifier, the backend normalizes and validates the question, rejects invalid input, and records topic and instruction-pattern keyword signals in the workflow. Jev receives these as hints, not as a semantic verdict. The query gate and Jev question versions changed so new requests do not reuse old cached decisions. Offline tests cover signal forwarding, invalid input stopping before Jev, and the normal multi-tool workflow; no live model call was made.
+
+Diagram clarification: the scoped-tools branch returns filtered evidence to the research agent, forming the repeatable tool loop. The separate agent-to-provenance arrow represents the draft after the loop. Each connection has its own arrowhead; browser inspection confirmed the direction.

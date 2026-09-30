@@ -1,7 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { getIncidentSimulation, getIncidentSimulations, reviewIncidentReport, streamIncidentSimulation } from './api'
 import IncidentReviewStage from './IncidentReviewStage'
+import TaskScroll from './TaskScroll'
+import { taskTrail } from './taskTrail'
 import { CandidateGateDetails, JevDetails, ReplayGroupDetails, VerifyAndSaveDetails } from './IncidentRunDetails'
 import { currentTask, runIdFromPath, tabFromUrl, withIncidentRun, withIncidentTab } from './incidentRunUi'
 import type { IncidentTab } from './incidentRunUi'
@@ -18,7 +20,6 @@ const LOGFIRE_PROJECT_URL =
   import.meta.env.VITE_LOGFIRE_PROJECT_URL ??
   'https://logfire-us.pydantic.dev/seijim27/ai-systems'
 
-const IncidentSystemDiagram = lazy(() => import('./IncidentSystemDiagram'))
 const INCIDENT_PATH = '/incident-investigation'
 
 function runIdAtLocation(): string | null {
@@ -147,21 +148,6 @@ function ReportView({ report, reportId }: { report: IncidentReport; reportId: st
         </div>
       </details>
     </div>
-  )
-}
-
-function SystemFlowchart() {
-  const [open, setOpen] = useState(false)
-  return (
-    <details className="incident-architecture" onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary><span>System architecture</span><strong>Explore the incident system design</strong><span aria-hidden="true">⌄</span></summary>
-      {open && <>
-        <p className="incident-diagram-note">The log stream keeps feeding candidate detection throughout the simulation. Only threshold-crossing candidates go to Jev. Expand the investigation stage below to see the actual model choices and tool results.</p>
-        <Suspense fallback={<p className="incident-diagram-note">Loading diagram…</p>}>
-          <IncidentSystemDiagram />
-        </Suspense>
-      </>}
-    </details>
   )
 }
 
@@ -344,7 +330,9 @@ export default function IncidentWorkspace() {
     : classifierSteps.map((step) => step.summary.replace('Candidate classified ', '')).join(' · ')
   const showTabs = loading || Boolean(result) || liveSteps.length > 0 || Boolean(error)
   const latestStep = liveSteps.at(-1)
-  const taskLabel = result ? `Simulation finished · ${result.stop_reason.replaceAll('_', ' ')}` : error ? 'Simulation stream failed' : currentTask(latestStep)
+  const taskOutcome = result ? `Simulation finished · ${result.stop_reason.replaceAll('_', ' ')}` : error ? 'Simulation stream failed' : undefined
+  const taskItems = taskTrail(steps, currentTask, taskOutcome)
+  if (!taskItems.length) taskItems.push({ key: 'connecting', label: currentTask(latestStep) })
   return (
     <section className="workspace-view incident-workspace">
       <div className="workspace-heading">
@@ -362,7 +350,6 @@ export default function IncidentWorkspace() {
         </div>
         <div className="incident-intro-stat"><strong>55 error logs</strong><span>Fixture v2 · timestamp order</span></div>
       </div>
-      <SystemFlowchart />
       <form className="incident-form" onSubmit={submit}>
         <div className="incident-form-heading">
           <div><p className="section-kicker">Simulation controls</p><h2>Simulate incident</h2></div>
@@ -383,7 +370,7 @@ export default function IncidentWorkspace() {
         <label htmlFor="incident-saved-run">Saved simulations</label>
         <select id="incident-saved-run" value={currentRunId ?? ''} disabled={loading || historyLoading || (!history.length && !result)} onChange={(event) => { void selectSavedRun(event.target.value) }}>
           <option value="">{historyLoading ? 'Loading runs…' : 'Select a saved run'}</option>
-          {currentRunId && !history.some((item) => item.run_id === currentRunId) && <option value={currentRunId}>{loading ? 'Running' : result ? 'Saved run' : 'Opening run'} · {currentRunId}</option>}
+          {currentRunId && !history.some((item) => item.run_id === currentRunId) && <option value={currentRunId}>{loading ? 'Running simulation' : result ? 'Saved simulation' : 'Opening simulation'}</option>}
           {history.map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.report_count} report{item.report_count === 1 ? '' : 's'} · {item.status}</option>)}
         </select>
         {historyError && <span role="alert">{historyError}</span>}
@@ -402,7 +389,7 @@ export default function IncidentWorkspace() {
           {(loading || result || liveSteps.length > 0) && (
             <section className="incident-panel incident-run-overview" aria-labelledby="incident-run-overview-title">
               <div className="incident-panel-heading"><div><p className="section-kicker">Simulation walkthrough</p><h2 id="incident-run-overview-title">What happened</h2></div><span>{result ? result.stop_reason.replaceAll('_', ' ') : 'Live'}</span></div>
-              <div className="incident-current-task" role="status" aria-live="polite"><span>{loading ? 'Current task' : 'Run outcome'}</span><strong>{taskLabel}</strong><small>{currentRunId ? `Run ${currentRunId}` : 'Connecting…'}</small></div>
+              <TaskScroll items={taskItems} active={loading} className="incident-task-scroll" />
               <p className="incident-section-note">The log replay continues while accepted candidates are investigated. Expand any stage to inspect its inputs, decisions, and records.</p>
               <ol className="incident-run-stages">
                 <RunStage number="01" title="Replay and group errors" state={result ? 'Finished' : 'Running'} description={result ? `${replayedErrors} errors considered · ${signatureGroups} groups · ${correlatedClusters} correlated clusters` : `${replayedErrors} error logs considered · grouping by service and message`}><ReplayGroupDetails steps={steps} /></RunStage>
@@ -419,7 +406,7 @@ export default function IncidentWorkspace() {
           {result && (
             <div className="incident-output">
               <div className="incident-run-bar">
-                <div><span className="incident-run-label">Run {result.run_id}</span><strong>{result.investigations.length} review packet{result.investigations.length === 1 ? '' : 's'} produced · {result.stop_reason.replaceAll('_', ' ')}</strong></div>
+                <div><strong>{result.investigations.length} review packet{result.investigations.length === 1 ? '' : 's'} produced · {result.stop_reason.replaceAll('_', ' ')}</strong></div>
                 <div className="incident-run-actions">
                   <span className={`status-pill status-${result.status}`}>Run {result.status}</span>
                   {result.logfire_trace_id && <a href={traceUrl(result.logfire_trace_id)} target="_blank" rel="noreferrer">Logfire trace ↗</a>}

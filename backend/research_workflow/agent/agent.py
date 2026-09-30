@@ -133,8 +133,8 @@ CURATED_FINANCIAL_METRICS: dict[str, tuple[str, ...]] = {
 
 
 model_name = "openai:gpt-5.6-terra"
-prompt_version = "9"
-tool_version = "9"
+prompt_version = "10"
+tool_version = "10"
 schema_version = "3"
 
 agent = Agent(
@@ -204,6 +204,11 @@ one targeted search_web call and inspect at least one promising result before
 finishing. If inspection returns no matching passages, refine the search query or
 focus rather than citing the search-result metadata. Disclose unavailable web
 coverage; never infer that a missing search result means an event did not occur.
+
+When the question asks for reported financial performance, call
+historical_financials. A historical as-of cutoff older than ten minutes cannot
+establish availability of Yahoo's current statement view; explain that limit
+instead of using the current view as historical evidence.
 
 The historical_financials tool returns a curated metric set by default. Use that
 default first. Supply at most 12 exact metric names only when the question requires
@@ -465,7 +470,7 @@ def inspect_web_results(ctx: RunContext[MyDeps], inputs: InspectWebInput):
             failed_ids.append(result.result_id)
             continue
         passages = build_document_evidence_candidates(
-            inputs.focus, rows, max_candidates=1, require_term_overlap=True
+            inputs.focus, rows, max_candidates=2, require_term_overlap=True
         )
         if passages:
             candidates.extend(passages)

@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import TypeAdapter
 
 from backend.db.schemas import DocumentType
-from backend.research_workflow.agent.models import (
+from backend.research_workflow.contracts import (
     DocumentEvidence,
     DraftResearchBriefing,
     EvidenceRecord,

@@ -10,27 +10,23 @@
 
 ## Request flow
 
-```text
-React form -> FastAPI -> request fingerprint / saved run
-                         |
-                  query classifier
-                         |
-             company profile + price context
-                         |
-                one bounded research agent
-                 /       |          \
-     stored filings  financials   current news
-         search                     search -> inspect
-                 \       |          /
-                draft findings + evidence IDs
-                         |
-          Python resolves IDs and source locators
-                         |
-            grounding -> one repair attempt
-                         |
-             verified summary and outlook
-                         |
-       saved briefing + verification + diagnostics
+```mermaid
+flowchart TD
+    UI[React research workspace] --> API[FastAPI request and run state]
+    API --> Q[Query classifier]
+    Q --> P[Company identity and prior-day price context]
+    P --> A[One bounded research agent]
+    A --> F[Stored SEC filing search]
+    A --> Y[Current Yahoo financial statements]
+    A --> S[Tavily web search: discovery]
+    S --> E[Tavily extract: selected URLs]
+    F --> C[Run-scoped evidence catalog]
+    Y --> C
+    E --> C
+    C --> D[Draft findings with evidence IDs]
+    D --> V[Source checks and grounding; one repair]
+    V --> R[research_runs: briefing, checks, checkpoint]
+    R --> UI
 ```
 
 The agent uses a tool loop because source selection depends on intermediate results. The application owns the request schema, allowed tools, step and time budgets, evidence catalog, database writes, and final verification. It does not use multiple research agents or an application-managed planning queue.
@@ -38,9 +34,9 @@ The agent uses a tool loop because source selection depends on intermediate resu
 ### Evidence and sources
 
 - SEC filings are explicitly loaded through the filing setup panel, chunked, embedded, and searched with metadata filters. This setup uses external services; it is not part of the offline test run.
-- Yahoo Finance supplies a company snapshot, prices, and historical financial statements. Structured financial evidence carries an exact field path and value.
-- World News API is queried during the research run. Search returns compact discovery data; the agent must inspect selected full-text articles before citing them. Inspection stores exact passages and registers citable evidence IDs. The integration enforces the code's 30-day free-plan window and the request's `as_of` cutoff.
-- The model chooses evidence IDs but does not author source metadata. Python hydrates the final output from the run-scoped evidence catalog and verifies document offsets and financial field paths.
+- Yahoo Finance supplies company identity, daily close prices, and current financial statements. Mutable snapshot metrics are not citable; daily prices on the `as_of` date are excluded. The financial statement tool declines historical `as_of` requests because the provider's current view cannot establish what was available then.
+- Tavily Search supplies dated discovery metadata for bounded company-scoped news or general web queries. Undated, later-than-`as_of`, and wrong-company results are excluded. The agent must extract selected URLs before citing them. Extraction stores exact passages and registers citable evidence IDs. Publication dates are provider estimates and extracted content is the current page, so historical availability is not proven.
+- The model chooses evidence IDs but does not author source metadata. Python hydrates the final output from the run-scoped evidence catalog and verifies document offsets, company and publication scope, and financial field paths. Request, tool, provider, evidence, and output contracts live in `contracts.py`.
 
 A grounding classifier checks each finding. A rejected finding receives at most one repair attempt; findings that still fail are excluded. The summary and outlook are rebuilt from retained findings and checked again, with deterministic fallbacks. `approval_ready` describes automated checks; there is no implemented human approve/reject workflow.
 
@@ -52,7 +48,7 @@ Follow-up for the portfolio-wide demo requirement: add an in-app ordered executi
 
 ## Local development
 
-Use Python 3.13, PostgreSQL with the `vector` extension, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `WORLD_NEWS_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`. See the [root README](../../README.md#run-the-backend-locally) for step-by-step backend and frontend commands.
+Use Python 3.13, PostgreSQL with the `vector` extension, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `TAVILY_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`. See the [root README](../../README.md#run-the-backend-locally) for step-by-step backend and frontend commands.
 
 ```sh
 # From the repository root, after dependencies and services are ready:
@@ -69,8 +65,8 @@ LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/r
 cd frontend && npm run build && npm run lint
 ```
 
-Tests mock provider calls and cover evidence contracts, news filtering and inspection, agent tool responses, and request/cache boundaries. They do not establish live provider behavior or briefing quality. There is no representative end-to-end evaluation set yet.
+Tests mock provider calls and cover evidence contracts, Tavily filtering and extraction, agent tool responses, a multi-tool fake-model agent run, and request/cache boundaries. They do not establish live provider behavior or briefing quality. There is no representative end-to-end evaluation set yet.
 
 ## Demo limits
 
-This is a local architecture demonstration. It lacks authentication, source-level access control, human approval actions, a durable worker queue, and measured quality/latency/cost evaluations. The free news window limits historical coverage. Provider failures and data quality can still prevent a successful briefing. The UI renders structured briefing fields and evidence directly rather than exporting Markdown.
+This is a local architecture demonstration. It lacks authentication, source-level access control, human approval actions, a durable worker queue, and measured quality/latency/cost evaluations. Tavily date estimates and current-page extraction cannot prove historical page content. Provider failures and data quality can still prevent a successful briefing. The UI renders structured briefing fields and evidence directly rather than exporting Markdown.

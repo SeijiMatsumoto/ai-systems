@@ -35,11 +35,11 @@ Incident Investigation is complete as a portfolio demo; its phase history and li
 
 ## Existing research demo
 
-The research system is a FastAPI backend and React/Vite frontend. A bounded single agent selects among filing search, financial data, and current news search/inspection. Python resolves evidence IDs and source locators, checks grounding, performs at most one repair pass, and saves the briefing and diagnostics. The app owns the tool limits, evidence catalog, persistence, and final verification. Its setup and known limits are in `backend/research_workflow/README.md`.
+The research system is a FastAPI backend and React/Vite frontend. A bounded single agent selects among filing search, financial data, and Tavily web search/extraction. Python resolves evidence IDs and source locators, checks grounding, performs at most one repair pass, and saves the briefing and diagnostics. The app owns the tool limits, evidence catalog, persistence, and final verification. Contracts are in `backend/research_workflow/contracts.py`; setup and known limits are in `backend/research_workflow/README.md`.
 
 The frontend is in `frontend/`; the ASGI entry point is `backend.main:app`. Shared research data utilities are in `backend/shared/`. Backend dependencies are in `backend/requirements.txt` and frontend dependencies in `frontend/package-lock.json`.
 
-`backend/.env` may contain `TAVILY_API_KEY` for future agents that need web search. No current incident tool uses it; incident evidence remains the synthetic telemetry fixture. The existing research news tool uses World News API. Add a scoped web search tool only when a phase requires it.
+`backend/.env` may contain `TAVILY_API_KEY` for research web search and extraction. No current incident tool uses it; incident evidence remains the synthetic telemetry fixture. Add other scoped web search tools only when a phase requires them.
 
 ## Verification
 

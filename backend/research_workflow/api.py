@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from backend.db import db_utils
 from backend.db.schemas import ResearchRun
-from backend.research_workflow.agent.models import BriefingRequest
+from backend.research_workflow.contracts import BriefingRequest
 from backend.research_workflow.data.filings import ingest_filings
 from backend.research_workflow.service.ingestion import (
     backfill_company_data,

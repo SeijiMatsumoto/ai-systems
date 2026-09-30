@@ -32,7 +32,7 @@ from backend.research_workflow.agent.evidence import (
     hydrate_briefing,
     load_evidence_catalog,
 )
-from backend.research_workflow.agent.models import (
+from backend.research_workflow.contracts import (
     BriefingRequest,
     DocumentEvidence,
     DraftResearchBriefing,
@@ -105,6 +105,7 @@ def _checkpoint_state(
 
 def _prefetched_financial_context(
     symbol: str,
+    as_of: datetime,
     company_snapshot: dict[str, object],
     close_data: list[dict[str, str | float]],
 ) -> tuple[
@@ -112,19 +113,10 @@ def _prefetched_financial_context(
     dict[str, EvidenceRecord],
     dict[str, object],
 ]:
-    snapshot_reference = f"company_snapshot:{symbol}"
     close_reference = f"close_data:{symbol}"
-    snapshot_candidates = [
-        candidate
-        for candidate in build_financial_evidence_candidates(
-            reference_id=snapshot_reference,
-            title=f"{symbol} company snapshot",
-            source="Yahoo Finance",
-            url=f"https://finance.yahoo.com/quote/{symbol}/",
-            data=company_snapshot,
-        )
-        if candidate.value is not None
-        and not candidate.field_path.startswith("latest_news_headlines")
+    # Daily close prices have no intraday timestamp. Exclude the cutoff day.
+    close_data = [
+        row for row in close_data if str(row.get("Date", "")) < as_of.date().isoformat()
     ]
     close_candidates = build_financial_evidence_candidates(
         reference_id=close_reference,
@@ -137,14 +129,11 @@ def _prefetched_financial_context(
         close_data,
         close_candidates,
     )
-    candidates: list[FinancialEvidence] = [
-        *snapshot_candidates,
-        *selected_close_candidates,
-    ]
+    candidates: list[FinancialEvidence] = selected_close_candidates
     snapshot_for_agent = {
         key: value
         for key, value in company_snapshot.items()
-        if key != "latest_news_headlines"
+        if key in {"symbol", "company_name", "sector", "industry"}
     }
     prefetched_context: dict[str, object] = {
         "company_snapshot": snapshot_for_agent,
@@ -157,7 +146,6 @@ def _prefetched_financial_context(
         prefetched_context,
         catalog_from_candidates(candidates),
         {
-            snapshot_reference: company_snapshot,
             close_reference: close_data,
         },
     )
@@ -356,7 +344,10 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                 )
                 prefetched_context, catalog, financial_sources = (
                     _prefetched_financial_context(
-                        request.symbol.strip().upper(), company_snapshot, close_data
+                        request.symbol.strip().upper(),
+                        request.as_of,
+                        company_snapshot,
+                        close_data,
                     )
                 )
 
@@ -435,7 +426,12 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     valid_evidence: list[EvidenceRecord] = []
                     for evidence in finding.evidence:
                         if isinstance(evidence, DocumentEvidence):
-                            is_valid = validate_document_evidence(session, evidence)
+                            is_valid = validate_document_evidence(
+                                session,
+                                evidence,
+                                symbol=request.symbol,
+                                as_of=request.as_of,
+                            )
                         else:
                             is_valid = validate_financial_evidence(
                                 evidence, financial_sources
@@ -643,6 +639,9 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
                     [
                         *briefing.limitations,
                         "Document searches expose at most three ranked passages per tool call.",
+                        "Web publication times are provider estimates; extracted pages reflect retrieval-time content.",
+                        "Current Yahoo snapshot fields are used only for company identity, not cited as historical financial evidence.",
+                        "Daily close prices on the as-of date are excluded because their intraday availability is unknown.",
                     ]
                 )
             )
@@ -713,7 +712,13 @@ async def run_research_workflow(request: BriefingRequest) -> ResearchWorkflowRes
         raise
 
 
-def validate_document_evidence(session: Session, evidence: DocumentEvidence) -> bool:
+def validate_document_evidence(
+    session: Session,
+    evidence: DocumentEvidence,
+    *,
+    symbol: str,
+    as_of: datetime,
+) -> bool:
     try:
         chunk_id = uuid.UUID(evidence.chunk_id)
         document_id = uuid.UUID(evidence.document_id)
@@ -726,7 +731,13 @@ def validate_document_evidence(session: Session, evidence: DocumentEvidence) -> 
     if (
         document.reference_id != evidence.reference_id
         or document.document_type != evidence.document_type
+        or document.title != evidence.title
+        or document.source_url != evidence.url
         or chunk.chunk_index != evidence.chunk_index
+        or (document.filter_metadata or {}).get("symbol") != symbol.strip().upper()
+        or document.published_at is None
+        or document.published_at > as_of
+        or document.published_at != evidence.published_at
     ):
         return False
     if hashlib.sha256(chunk.content.encode()).hexdigest() != evidence.content_hash:

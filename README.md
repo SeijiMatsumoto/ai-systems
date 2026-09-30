@@ -36,7 +36,7 @@ cp backend/.env.example backend/.env
 .venv/bin/python -c 'from backend.db.db_utils import init_db; init_db()'
 ```
 
-Set `DATABASE_URL` in the new `backend/.env` before running `init_db()`. A new database needs PostgreSQL with the `vector` extension; an existing database needs the missing checked-in migrations instead of `init_db()`. Live research briefings need `OPENAI_API_KEY` and `WORLD_NEWS_API_KEY`; the incident simulation needs `TYPESAFE_API_KEY` and, when an incident is accepted, `OPENAI_API_KEY`. To export traces, set a telemetry-write `LOGFIRE_API_KEY` (or `LOGFIRE_TOKEN`) and enable `LOGFIRE_SEND_TO_LOGFIRE`. The example disables export by default. Filing setup through the API or Admin view makes external provider calls.
+Set `DATABASE_URL` in the new `backend/.env` before running `init_db()`. A new database needs PostgreSQL with the `vector` extension; an existing database needs the missing checked-in migrations instead of `init_db()`. Live research briefings need `OPENAI_API_KEY` and `TAVILY_API_KEY`; the incident simulation needs `TYPESAFE_API_KEY` and, when an incident is accepted, `OPENAI_API_KEY`. To export traces, set a telemetry-write `LOGFIRE_API_KEY` (or `LOGFIRE_TOKEN`) and enable `LOGFIRE_SEND_TO_LOGFIRE`. The example disables export by default. Filing setup through the API or Admin view makes external provider calls.
 
 The incident simulation route uses the checked-in v2 fixture and accepts an optional `max_reports` integer from 1 to 3. It calls Jev for candidates and the configured investigator model for accepted incidents; the offline checks below use fake providers. The older alert-first route accepts `service=checkout`, `alert_id=alert-0001`, and a fixture-bounded investigation window.
 
@@ -52,7 +52,7 @@ The frontend defaults to `http://127.0.0.1:8000` for the backend.
 
 ## Research demo
 
-A user asks a question about a public company. The backend gets a company snapshot and price history, then one bounded agent chooses among stored filing search, historical financials, and live news search and inspection. It returns findings that reference evidence IDs. Application code resolves those IDs, checks source locators, runs a bounded grounding and repair pass, and saves the briefing and run diagnostics. The React UI shows citations, verification state, and recent runs.
+A user asks a question about a public company. The backend gets company identity and prior-day price history, then one bounded agent chooses among stored filing search, historical financials, and Tavily web search and extraction. It returns findings that reference evidence IDs. Application code resolves those IDs, checks source locators, runs a bounded grounding and repair pass, and saves the briefing and run diagnostics. The React UI shows citations, verification state, and recent runs.
 
 [Research architecture and local setup](backend/research_workflow/README.md)
 

@@ -5,7 +5,11 @@ from typing import Any
 
 from backend.db import db_utils, schemas
 from backend.research_workflow.agent.evidence import split_passages
-from backend.shared.article_processing import ARTICLE_CLEANING_VERSION
+from backend.shared.article_processing import (
+    ARTICLE_CLEANING_VERSION,
+    MIN_ARTICLE_TEXT_CHARS,
+    clean_article_text,
+)
 
 
 def _required_string(article: Mapping[str, Any], key: str) -> str:
@@ -31,26 +35,41 @@ def _parse_published_at(value: object) -> datetime:
     return published_at.astimezone(timezone.utc)
 
 
-def persist_inspected_news_article(
+def persist_inspected_web_page(
     article: Mapping[str, Any],
     *,
     symbol: str,
 ) -> list[dict[str, Any]]:
     """Persist one inspected article and return DB-shaped rows for evidence ranking."""
     raw_reference_id = _required_string(article, "reference_id")
-    reference_id = (
-        raw_reference_id
-        if raw_reference_id.startswith("world_news:")
-        else f"world_news:{raw_reference_id}"
-    )
+    provider = str(article.get("provider") or "world_news_api")
+    if provider not in {"world_news_api", "tavily"}:
+        raise ValueError("Unsupported article provider")
+    prefix = "tavily:" if provider == "tavily" else "world_news:"
     title = _required_string(article, "title")
     source_url = _required_string(article, "source_url")
-    content = _required_string(article, "content")
+    content = clean_article_text(title, _required_string(article, "content"))
+    if len(content) < MIN_ARTICLE_TEXT_CHARS:
+        raise ValueError("Extracted article did not contain enough source text")
     published_at = _parse_published_at(article.get("published_at"))
     author_value = article.get("author")
     author = str(author_value).strip() if author_value else None
     content_hash = hashlib.sha256(content.encode()).hexdigest()
     normalized_symbol = symbol.strip().upper()
+    normalized_reference_id = (
+        raw_reference_id
+        if raw_reference_id.startswith(prefix)
+        else f"{prefix}{raw_reference_id}"
+    )
+    # Keep web evidence immutable across later extractions or metadata changes.
+    version = hashlib.sha256(
+        f"{normalized_symbol}|{title}|{published_at.isoformat()}|{content_hash}".encode()
+    ).hexdigest()[:16]
+    reference_id = (
+        f"{normalized_reference_id}:{version}"
+        if provider == "tavily"
+        else normalized_reference_id
+    )
 
     with db_utils.get_session() as session:
         document = (
@@ -61,7 +80,7 @@ def persist_inspected_news_article(
 
         metadata = {
             "symbol": normalized_symbol,
-            "provider": "world_news_api",
+            "provider": provider,
             "content_quality": "full_text",
             "content_hash": content_hash,
             "cleaning_version": ARTICLE_CLEANING_VERSION,
@@ -110,7 +129,7 @@ def persist_inspected_news_article(
 
             chunk_metadata = {
                 "symbol": normalized_symbol,
-                "provider": "world_news_api",
+                "provider": provider,
                 "content_quality": "full_text",
             }
             existing_chunks = [

@@ -9,7 +9,7 @@ from backend.research_workflow.agent.evidence import (
     hydrate_briefing,
     split_passages,
 )
-from backend.research_workflow.agent.models import (
+from backend.research_workflow.contracts import (
     DraftFinding,
     DraftResearchBriefing,
 )

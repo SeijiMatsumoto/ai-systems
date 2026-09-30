@@ -25,6 +25,60 @@ class BriefingRequest(BaseModel):
         return value
 
 
+class SearchDocumentsInput(BaseModel):
+    query: str = Field(min_length=1, max_length=300)
+    document_type: Literal[DocumentType.FILING, DocumentType.GENERIC]
+    top_n: int = Field(default=3, ge=1, le=3)
+    published_after: datetime | None = None
+
+    @field_validator("published_after")
+    @classmethod
+    def require_timezone_when_set(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("published_after must include a timezone")
+        return value
+
+
+class FetchFinancialsInput(BaseModel):
+    statement_type: Literal["income", "balance_sheet", "cash_flow"] = "income"
+    frequency: Literal["yearly", "quarterly"] = "yearly"
+    periods: int = Field(default=4, ge=1, le=8)
+    metrics: list[str] | None = Field(default=None, max_length=12)
+
+
+class SearchWebInput(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+    topic: Literal["news", "general"] = "news"
+    limit: int = Field(default=5, ge=1, le=5)
+    date_from: datetime | None = None
+
+    @field_validator("date_from")
+    @classmethod
+    def require_timezone_when_set(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("date_from must include a timezone")
+        return value
+
+
+class InspectWebInput(BaseModel):
+    result_ids: list[str] = Field(min_length=1, max_length=3)
+    focus: str = Field(min_length=1, max_length=300)
+
+
+class WebSearchResult(BaseModel):
+    result_id: str
+    title: str
+    source_url: str
+    summary: str
+    published_at: datetime
+    date_precision: Literal["instant", "date"]
+
+
+class ExtractedWebPage(BaseModel):
+    source_url: str
+    content: str
+
+
 class EvidenceCandidate(BaseModel):
     """Common identity fields for evidence exposed to the agent."""
 

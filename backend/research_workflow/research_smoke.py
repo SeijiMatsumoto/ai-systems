@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 
 import logfire
 
-from backend.research_workflow.agent.models import BriefingRequest
+from backend.research_workflow.contracts import BriefingRequest
 from backend.research_workflow.service.research import (
     run_research_workflow,
 )

@@ -616,9 +616,9 @@ function BriefingView({
 
         <footer className="note-footer">
           <span>
-            Generated research · Review cited evidence · News discovery via{' '}
-            <a href="https://worldnewsapi.com/" rel="noreferrer" target="_blank">
-              World News API
+            Generated research · Review cited evidence · Web discovery via{' '}
+            <a href="https://tavily.com/" rel="noreferrer" target="_blank">
+              Tavily
             </a>
           </span>
           <code>{result.run_id}</code>

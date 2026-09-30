@@ -3,7 +3,7 @@
 import asyncio
 import json
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Never
 from uuid import UUID
 
@@ -49,6 +49,12 @@ class InvestigationResponse(BaseModel):
     error_type: str | None
 
 
+class ReportReview(BaseModel):
+    decision: Literal["approved", "changes_requested"]
+    note: str = Field(default="", max_length=500)
+    reviewed_at: datetime
+
+
 class SimulationResponse(BaseModel):
     run_id: UUID
     status: Literal["completed", "failed"]
@@ -60,6 +66,12 @@ class SimulationResponse(BaseModel):
     workflow_steps: list[WorkflowStep]
     logfire_trace_id: str | None
     error_type: str | None
+    review_decisions: dict[str, ReportReview] = Field(default_factory=dict)
+
+
+class ReportReviewRequest(BaseModel):
+    decision: Literal["approved", "changes_requested"]
+    note: str = Field(default="", max_length=500)
 
 
 class SimulationRequest(BaseModel):
@@ -133,6 +145,55 @@ def get_simulation(run_id: UUID) -> SimulationResponse:
             if saved is None:
                 raise HTTPException(status_code=404, detail="Simulation run not found")
             return SimulationResponse.model_validate(saved.response_payload)
+    except SQLAlchemyError as exc:
+        _history_schema_error(exc)
+
+
+@router.post(
+    "/agent/incident_investigation/simulations/{run_id}/reviews/{incident_id}",
+    response_model=SimulationResponse,
+)
+def review_report(
+    run_id: UUID, incident_id: str, request: ReportReviewRequest
+) -> SimulationResponse:
+    """Record one demo review decision for a verified report in a saved run."""
+    note = request.note.strip()
+    if request.decision == "changes_requested" and not note:
+        raise HTTPException(status_code=422, detail="Explain the requested changes")
+    try:
+        with db_utils.get_session() as session:
+            saved = session.get(IncidentSimulationOutput, run_id, with_for_update=True)
+            if saved is None:
+                raise HTTPException(status_code=404, detail="Simulation run not found")
+            response = SimulationResponse.model_validate(saved.response_payload)
+            report_index = next(
+                (
+                    index
+                    for index, incident in enumerate(response.detected_incidents)
+                    if incident.incident_id == incident_id
+                ),
+                None,
+            )
+            if report_index is None:
+                raise HTTPException(status_code=404, detail="Incident report not found")
+            investigation = response.investigations[report_index]
+            if (
+                investigation.report is None
+                or investigation.verification is None
+                or not investigation.verification.passed
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Only verified reports can be reviewed"
+                )
+            if incident_id in response.review_decisions:
+                raise HTTPException(status_code=409, detail="Report already reviewed")
+            response.review_decisions[incident_id] = ReportReview(
+                decision=request.decision,
+                note=note,
+                reviewed_at=datetime.now(timezone.utc),
+            )
+            saved.response_payload = response.model_dump(mode="json")
+            return response
     except SQLAlchemyError as exc:
         _history_schema_error(exc)
 

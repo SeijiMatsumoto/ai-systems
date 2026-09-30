@@ -144,6 +144,18 @@ export function getIncidentSimulation(runId: string): Promise<IncidentSimulation
   return apiRequest(`/agent/incident_investigation/simulations/${runId}`)
 }
 
+export function reviewIncidentReport(
+  runId: string,
+  incidentId: string,
+  decision: 'approved' | 'changes_requested',
+  note: string,
+): Promise<IncidentSimulationResult> {
+  return apiRequest(
+    `/agent/incident_investigation/simulations/${runId}/reviews/${encodeURIComponent(incidentId)}`,
+    { method: 'POST', body: JSON.stringify({ decision, note }) },
+  )
+}
+
 export function getResearchRun(runId: string): Promise<ResearchRunDetail> {
   return apiRequest(`/research-runs/${runId}`)
 }

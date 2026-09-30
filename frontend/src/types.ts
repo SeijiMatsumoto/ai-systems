@@ -174,6 +174,12 @@ export interface IncidentReport {
   review_required: boolean
 }
 
+export interface IncidentReportReview {
+  decision: 'approved' | 'changes_requested'
+  note: string
+  reviewed_at: string
+}
+
 export interface IncidentVerificationIssue {
   code: 'empty_report' | 'invalid_kind' | 'unknown_evidence' | 'not_surfaced' | 'outside_scope'
   path: string
@@ -267,6 +273,7 @@ export interface IncidentSimulationResult {
   workflow_steps: IncidentWorkflowStep[]
   logfire_trace_id: string | null
   error_type: string | null
+  review_decisions?: Record<string, IncidentReportReview>
 }
 
 export interface IncidentSimulationSummary {

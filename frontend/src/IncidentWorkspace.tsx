@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 
-import { getIncidentSimulation, getIncidentSimulations, streamIncidentSimulation } from './api'
+import { getIncidentSimulation, getIncidentSimulations, reviewIncidentReport, streamIncidentSimulation } from './api'
+import IncidentReviewStage from './IncidentReviewStage'
 import { CandidateGateDetails, JevDetails, ReplayGroupDetails, VerifyAndSaveDetails } from './IncidentRunDetails'
 import { currentTask, runIdFromPath, tabFromUrl, withIncidentRun, withIncidentTab } from './incidentRunUi'
 import type { IncidentTab } from './incidentRunUi'
@@ -93,124 +94,58 @@ function ClaimCard({
 
 function ReportView({ report, reportId }: { report: IncidentReport; reportId: string }) {
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
   const evidence = new Map(report.evidence.map((item) => [item.evidence_id, item]))
+
+  useEffect(() => {
+    if (!selectedEvidenceId || !evidenceOpen) return
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`incident-evidence-${reportId}-${selectedEvidenceId}`)?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+        block: 'center',
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedEvidenceId, evidenceOpen, reportId])
 
   const selectEvidence = (id: string) => {
     setSelectedEvidenceId(id)
-    document.getElementById(`incident-evidence-${reportId}-${id}`)?.scrollIntoView({
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
-      block: 'center',
-    })
+    setEvidenceOpen(true)
   }
 
   return (
-    <div className="incident-result-grid">
-      <div className="incident-report-column">
-        <section className="incident-panel incident-timeline" aria-labelledby={`incident-timeline-title-${reportId}`}>
-          <div className="incident-panel-heading">
-            <div>
-              <p className="section-kicker">01 / Sequence</p>
-              <h2 id={`incident-timeline-title-${reportId}`}>Observed timeline</h2>
-            </div>
-            <span>{report.timeline.length} cited observations</span>
-          </div>
-          <p className="incident-section-note">
-            Facts and correlations are shown in time order. Timing alone does not establish cause.
-          </p>
-          <div className="incident-claim-list">
-            {report.timeline.map((claim, index) => (
-              <ClaimCard
-                key={`${claim.evidence_ids.join('-')}-${index}`}
-                claim={claim}
-                index={index}
-                evidence={evidence}
-                onSelectEvidence={selectEvidence}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="incident-panel" aria-labelledby={`incident-causes-title-${reportId}`}>
-          <div className="incident-panel-heading">
-            <div>
-              <p className="section-kicker">02 / Assessment</p>
-              <h2 id={`incident-causes-title-${reportId}`}>Candidate causes</h2>
-            </div>
-            <span>Engineer review required</span>
-          </div>
-          {report.likely_causes.length ? (
-            <div className="incident-claim-list">
-              {report.likely_causes.map((claim, index) => (
-                <ClaimCard
-                  key={`${claim.evidence_ids.join('-')}-${index}`}
-                  claim={claim}
-                  index={index}
-                  evidence={evidence}
-                  onSelectEvidence={selectEvidence}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="incident-section-note">The investigator did not identify a supported candidate cause.</p>
-          )}
-        </section>
-
-        <div className="incident-bottom-grid">
-          <section className="incident-panel" aria-labelledby={`incident-unknowns-title-${reportId}`}>
-            <p className="section-kicker">03 / Limits</p>
-            <h2 id={`incident-unknowns-title-${reportId}`}>Unknowns & coverage</h2>
-            {report.unknowns.length ? (
-              <ul className="incident-text-list">
-                {report.unknowns.map((unknown, index) => <li key={`${unknown}-${index}`}>{unknown}</li>)}
-              </ul>
-            ) : <p className="incident-section-note">No unknowns were listed.</p>}
-            {report.coverage_gaps.map((gap, index) => (
-              <div className="incident-gap" key={`${gap.service}-${gap.start}-${index}`}>
-                <strong>{gap.service} · {gap.source} gap</strong>
-                <span>{utcTime(gap.start)}–{utcTime(gap.end)} UTC</span>
-                <p>{gap.reason}</p>
-              </div>
-            ))}
-          </section>
-          <section className="incident-panel" aria-labelledby={`incident-checks-title-${reportId}`}>
-            <p className="section-kicker">04 / Follow-up</p>
-            <h2 id={`incident-checks-title-${reportId}`}>Next checks</h2>
-            {report.next_checks.length ? (
-              <ol className="incident-text-list">
-                {report.next_checks.map((check, index) => <li key={`${check}-${index}`}>{check}</li>)}
-              </ol>
-            ) : <p className="incident-section-note">No next checks were proposed.</p>}
-          </section>
+    <div className="incident-report-detail">
+      <section className="incident-report-detail-section" aria-labelledby={`incident-timeline-title-${reportId}`}>
+        <div className="incident-panel-heading"><div><p className="section-kicker">Source-backed sequence</p><h3 id={`incident-timeline-title-${reportId}`}>Observed timeline</h3></div><span>{report.timeline.length} observations</span></div>
+        <p className="incident-section-note">Facts and correlations in time order. Timing alone does not establish cause.</p>
+        <div className="incident-claim-list">
+          {report.timeline.map((claim, index) => <ClaimCard key={`${claim.evidence_ids.join('-')}-${index}`} claim={claim} index={index} evidence={evidence} onSelectEvidence={selectEvidence} />)}
         </div>
+      </section>
+
+      <section className="incident-report-detail-section" aria-labelledby={`incident-causes-title-${reportId}`}>
+        <div className="incident-panel-heading"><div><p className="section-kicker">Assessment</p><h3 id={`incident-causes-title-${reportId}`}>Proposed cause</h3></div><span>Hypothesis, not confirmed</span></div>
+        {report.likely_causes.length ? <div className="incident-claim-list">{report.likely_causes.map((claim, index) => <ClaimCard key={`${claim.evidence_ids.join('-')}-${index}`} claim={claim} index={index} evidence={evidence} onSelectEvidence={selectEvidence} />)}</div> : <p className="incident-section-note">No supported candidate cause was identified.</p>}
+      </section>
+
+      <div className="incident-report-detail-pair">
+        <section className="incident-report-detail-section" aria-labelledby={`incident-unknowns-title-${reportId}`}>
+          <p className="section-kicker">Limits</p><h3 id={`incident-unknowns-title-${reportId}`}>What remains unknown</h3>
+          {report.unknowns.length ? <ul className="incident-text-list">{report.unknowns.map((unknown, index) => <li key={`${unknown}-${index}`}>{unknown}</li>)}</ul> : <p className="incident-section-note">No unknowns were listed.</p>}
+          {report.coverage_gaps.map((gap, index) => <div className="incident-gap" key={`${gap.service}-${gap.start}-${index}`}><strong>{gap.service} · {gap.source} gap</strong><span>{utcTime(gap.start)}–{utcTime(gap.end)} UTC</span><p>{gap.reason}</p></div>)}
+        </section>
+        <section className="incident-report-detail-section" aria-labelledby={`incident-checks-title-${reportId}`}>
+          <p className="section-kicker">Follow-up</p><h3 id={`incident-checks-title-${reportId}`}>Next checks</h3>
+          {report.next_checks.length ? <ol className="incident-text-list">{report.next_checks.map((check, index) => <li key={`${check}-${index}`}>{check}</li>)}</ol> : <p className="incident-section-note">No next checks were proposed.</p>}
+        </section>
       </div>
 
-      <aside className="incident-evidence-panel" aria-labelledby={`incident-evidence-title-${reportId}`}>
-        <div className="incident-panel-heading">
-          <div>
-            <p className="section-kicker">Source records</p>
-            <h2 id={`incident-evidence-title-${reportId}`}>Evidence ledger</h2>
-          </div>
-          <span>{report.evidence.length}</span>
+      <details className="incident-evidence-disclosure" open={evidenceOpen} onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}>
+        <summary><span><strong>Evidence ledger</strong><small>{report.evidence.length} exact fixture records cited above</small></span><span aria-hidden="true">⌄</span></summary>
+        <div className="incident-evidence-list">
+          {report.evidence.map((item) => <article id={`incident-evidence-${reportId}-${item.evidence_id}`} className={`incident-evidence-item ${selectedEvidenceId === item.evidence_id ? 'selected' : ''}`} key={item.evidence_id}><div className="incident-evidence-meta"><strong>{item.evidence_id}</strong><span>{item.source} · {item.service}</span></div><time dateTime={item.observed_at}>{utcTime(item.observed_at)} UTC</time><p>{item.excerpt}</p><code>{item.locator}</code></article>)}
         </div>
-        <p className="incident-section-note">
-          Exact fixture records cited by the report. Select a citation to jump here.
-        </p>
-        {report.evidence.map((item) => (
-          <article
-            id={`incident-evidence-${reportId}-${item.evidence_id}`}
-            className={`incident-evidence-item ${selectedEvidenceId === item.evidence_id ? 'selected' : ''}`}
-            key={item.evidence_id}
-          >
-            <div className="incident-evidence-meta">
-              <strong>{item.evidence_id}</strong>
-              <span>{item.source} · {item.service}</span>
-            </div>
-            <time dateTime={item.observed_at}>{utcTime(item.observed_at)} UTC</time>
-            <p>{item.excerpt}</p>
-            <code>{item.locator}</code>
-          </article>
-        ))}
-      </aside>
+      </details>
     </div>
   )
 }
@@ -459,7 +394,7 @@ export default function IncidentWorkspace() {
             <span>Run</span><small>Five expandable stages</small>
           </button>
           <button id="incident-result-tab" type="button" role="tab" aria-controls="incident-result-panel" aria-selected={activeTab === 'result'} disabled={!result && !error} onClick={() => { setActiveTab('result'); updateTabQuery('result') }}>
-            <span>Result</span><small>{result ? `${result.investigations.length} report${result.investigations.length === 1 ? '' : 's'} · ${result.status}` : error ? 'Failed' : 'Available when finished'}</small>
+            <span>Result</span><small>{result ? `${result.investigations.length} review packet${result.investigations.length === 1 ? '' : 's'} · run ${result.status}` : error ? 'Failed' : 'Available when finished'}</small>
           </button>
         </div>
         <section id="incident-run-panel" className="incident-tab-panel" role="tabpanel" aria-labelledby="incident-run-tab" hidden={activeTab !== 'run'}>
@@ -484,9 +419,9 @@ export default function IncidentWorkspace() {
           {result && (
             <div className="incident-output">
               <div className="incident-run-bar">
-                <div><span className="incident-run-label">Run {result.run_id}</span><strong>{result.investigations.length} report{result.investigations.length === 1 ? '' : 's'} produced · {result.stop_reason.replaceAll('_', ' ')}</strong></div>
+                <div><span className="incident-run-label">Run {result.run_id}</span><strong>{result.investigations.length} review packet{result.investigations.length === 1 ? '' : 's'} produced · {result.stop_reason.replaceAll('_', ' ')}</strong></div>
                 <div className="incident-run-actions">
-                  <span className={`status-pill status-${result.status}`}>{result.status}</span>
+                  <span className={`status-pill status-${result.status}`}>Run {result.status}</span>
                   {result.logfire_trace_id && <a href={traceUrl(result.logfire_trace_id)} target="_blank" rel="noreferrer">Logfire trace ↗</a>}
                 </div>
               </div>
@@ -495,12 +430,20 @@ export default function IncidentWorkspace() {
               {result.investigations.map((investigation, index) => {
                 const detected = result.detected_incidents[index]
                 const reportId = detected?.incident_id ?? String(index)
+                const review = result.review_decisions?.[reportId]
                 return (
                   <section className="incident-investigation-result" key={reportId} aria-label={`Investigation ${index + 1}`}>
-                    <div className="incident-report-heading"><div><p className="section-kicker">Report {index + 1}</p><h2>{detected?.service ?? 'Detected incident'} at {detected ? utcTime(detected.observed_at) : 'unknown time'} UTC</h2></div><span className={`status-pill status-${investigation.status}`}>{investigation.stop_reason.replaceAll('_', ' ')}</span></div>
-                    {detected && <p className="incident-trigger">Trigger {detected.trigger_log_id} · window {utcTime(detected.window_start)}–{utcTime(detected.window_end)} UTC · {detected.incident_id}</p>}
-                    {investigation.report ? <ReportView key={reportId} report={investigation.report} reportId={reportId} /> : <div className="incident-panel incident-failure"><h2>No verified report</h2><p>{investigation.workflow_steps.findLast((step) => step.stage === 'agent' && step.status === 'failed')?.details.failure_detail as string | undefined ?? investigation.error_type ?? investigation.stop_reason.replaceAll('_', ' ')}</p>{investigation.verification?.issues.map((issue, issueIndex) => <p key={issueIndex}>{issue.code} at {issue.path}</p>)}</div>}
-                    {investigation.report?.review_required && <p className="incident-review-note">Engineer review required before treating the report as an operational conclusion.</p>}
+                    {investigation.report && detected && <IncidentReviewStage
+                      report={investigation.report}
+                      detected={detected}
+                      reportId={reportId}
+                      review={review}
+                      onDecision={async (decision, note) => {
+                        const updated = await reviewIncidentReport(result.run_id, reportId, decision, note)
+                        setResult((current) => current?.run_id === updated.run_id ? updated : current)
+                      }}
+                    />}
+                    {investigation.report ? <details className="incident-full-report"><summary><span><strong>Full report and source records</strong><small>{investigation.report.timeline.length} observations · {investigation.report.evidence.length} cited records · {investigation.report.next_checks.length} next checks</small></span><span aria-hidden="true">⌄</span></summary><ReportView key={reportId} report={investigation.report} reportId={reportId} /></details> : <div className="incident-panel incident-failure"><h2>No verified report</h2><p>{investigation.workflow_steps.findLast((step) => step.stage === 'agent' && step.status === 'failed')?.details.failure_detail as string | undefined ?? investigation.error_type ?? investigation.stop_reason.replaceAll('_', ' ')}</p>{investigation.verification?.issues.map((issue, issueIndex) => <p key={issueIndex}>{issue.code} at {issue.path}</p>)}</div>}
                   </section>
                 )
               })}

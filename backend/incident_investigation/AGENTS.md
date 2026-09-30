@@ -64,6 +64,13 @@ payload remains saved in the database. Result opens on completion and shows repo
 citations, coverage gaps, and engineer-review state. Selected simulations use
 `/incident-investigation/:runId?tab=run|result` so a reload or shared URL
 restores the result and selected tab.
+Result now includes a saved engineer approval stage for each verified report.
+Reviewers can approve or request changes with a note; decisions are stored in
+the existing simulation payload and are immutable for that report. The demo
+has no reviewer identity or authorization and does not trigger remediation.
+The result view leads with a compact decision brief derived from the saved
+report, placing the trigger before the cause hypothesis and the primary unknown.
+The full report and source ledger are available in one expandable section.
 `smoketests/` contains separate CLI scripts for the two Jev candidate calls and
 for the investigator's first query and final draft model requests. Each script
 uses pinned input and checks one model response; neither investigator script runs

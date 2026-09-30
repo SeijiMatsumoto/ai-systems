@@ -406,7 +406,8 @@ pre,
   background: var(--warning-soft);
 }
 
-.status-failed {
+.status-failed,
+.status-changes_requested {
   border-color: #e0bdb9;
   color: var(--danger);
   background: var(--danger-soft);
@@ -1951,6 +1952,50 @@ pre,
 .incident-trigger, .incident-review-note, .incident-error-type { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .incident-review-note { color: var(--warning); }
 
+.incident-approval {
+  overflow: hidden;
+  border: 1px solid #c9d3cc;
+  border-left: 5px solid var(--accent-dark);
+  border-radius: 12px;
+  background: var(--paper);
+}
+
+.incident-approval-approved { border-left-color: var(--accent); }
+.incident-approval-changes_requested { border-left-color: var(--danger); }
+.incident-approval-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 22px 25px 19px; }
+.incident-approval-heading h2 { max-width: 65ch; margin: 6px 0 0; font-size: 21px; line-height: 1.3; }
+.incident-approval-status { padding: 6px 9px; border: 1px solid #deceac; border-radius: 5px; background: var(--warning-soft); color: var(--warning); font-size: 10px; font-weight: 800; text-transform: uppercase; white-space: nowrap; }
+.incident-approval-approved .incident-approval-status { border-color: #bcd7c8; background: var(--accent-soft); color: var(--accent-dark); }
+.incident-approval-changes_requested .incident-approval-status { border-color: #e0bdb9; background: var(--danger-soft); color: var(--danger); }
+.incident-approval-core { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.incident-approval-core-item { min-width: 0; padding: 21px 25px; }
+.incident-approval-core-item + .incident-approval-core-item { border-left: 1px solid var(--line); }
+.incident-approval-core-item > span, .incident-approval-decision > div:first-child > span { color: var(--accent-dark); font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.incident-approval-core-item p { margin: 10px 0; font-size: 14px; font-weight: 650; line-height: 1.55; }
+.incident-approval-core-item small { color: var(--faint); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; overflow-wrap: anywhere; }
+.incident-approval-context { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 24px; padding: 19px 25px; }
+.incident-approval-context > div + div { padding-left: 23px; border-left: 1px solid var(--line); }
+.incident-approval-context strong { font-size: 11px; }
+.incident-approval-context ul { display: grid; gap: 7px; margin: 10px 0 0; padding-left: 17px; color: #4e5954; font-size: 11px; line-height: 1.5; }
+.incident-approval-context p { margin: 10px 0 0; color: #4e5954; font-size: 11px; line-height: 1.5; }
+.incident-approval-context small { display: block; margin-top: 8px; color: var(--faint); font-size: 10px; }
+.incident-approval-decision { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 18px 25px; border-top: 1px solid var(--line); background: #f4f8f5; }
+.incident-approval-decision > div:first-child { max-width: 75ch; }
+.incident-approval-decision strong { display: block; margin-top: 5px; font-size: 14px; }
+.incident-approval-decision p { margin: 6px 0 0; color: #4e5954; font-size: 11px; line-height: 1.55; }
+.incident-approval-decision small { display: block; margin-top: 9px; color: var(--muted); font-size: 10px; }
+.incident-approval-actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.incident-approval-actions button, .incident-approval-feedback button { padding: 9px 12px; border-radius: 6px; font-size: 11px; font-weight: 750; white-space: nowrap; cursor: pointer; }
+.incident-approval-approve { border: 1px solid var(--accent-dark); background: var(--accent-dark); color: white; }
+.incident-approval-request { border: 1px solid #b8c9bd; background: white; color: var(--accent-dark); }
+.incident-approval-actions button:disabled, .incident-approval-feedback button:disabled { opacity: 0.5; cursor: not-allowed; }
+.incident-approval-feedback { display: grid; gap: 9px; padding: 17px 25px; border-top: 1px solid var(--line); }
+.incident-approval-feedback label { font-size: 11px; font-weight: 750; }
+.incident-approval-feedback textarea { width: 100%; resize: vertical; padding: 10px; border: 1px solid #aabcb0; border-radius: 6px; background: white; font-size: 12px; }
+.incident-approval-feedback button { justify-self: start; border: 1px solid #7b513e; background: #7b513e; color: white; }
+.incident-approval-error { margin: 0; padding: 0 25px 12px; color: var(--danger); font-size: 11px; }
+.incident-approval-footnote { margin: 0; padding: 10px 25px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
+
 .incident-loading,
 .incident-empty {
   padding: 30px;
@@ -2025,6 +2070,23 @@ pre,
   font-weight: 680;
   white-space: nowrap;
 }
+
+.incident-full-report { overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--paper); }
+.incident-full-report > summary, .incident-evidence-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 16px 20px; list-style: none; cursor: pointer; }
+.incident-full-report > summary::-webkit-details-marker, .incident-evidence-disclosure > summary::-webkit-details-marker { display: none; }
+.incident-full-report > summary > span:first-child, .incident-evidence-disclosure > summary > span:first-child { display: grid; gap: 4px; }
+.incident-full-report > summary strong, .incident-evidence-disclosure > summary strong { font-size: 12px; }
+.incident-full-report > summary small, .incident-evidence-disclosure > summary small { color: var(--muted); font-size: 10px; }
+.incident-full-report > summary > span:last-child, .incident-evidence-disclosure > summary > span:last-child { color: var(--muted); transition: transform 160ms ease; }
+.incident-full-report[open] > summary > span:last-child, .incident-evidence-disclosure[open] > summary > span:last-child { transform: rotate(180deg); }
+.incident-full-report > summary:hover, .incident-evidence-disclosure > summary:hover { background: var(--canvas); }
+.incident-report-detail { padding: 0 22px 22px; border-top: 1px solid var(--line); }
+.incident-report-detail-section { padding: 22px 0; border-bottom: 1px solid var(--line); }
+.incident-report-detail-section h3 { margin: 5px 0 0; font-size: 15px; }
+.incident-report-detail-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.incident-report-detail-pair .incident-report-detail-section { min-width: 0; }
+.incident-evidence-disclosure { margin-top: 19px; border: 1px solid var(--line); border-radius: 7px; }
+.incident-evidence-list { padding: 0 18px 8px; border-top: 1px solid var(--line); }
 
 .incident-result-grid {
   display: grid;
@@ -2275,6 +2337,14 @@ pre,
   .incident-run-bar { align-items: flex-start; flex-direction: column; }
   .incident-panel,
   .incident-evidence-panel { padding: 21px; }
+  .incident-approval-heading, .incident-approval-decision { align-items: flex-start; flex-direction: column; }
+  .incident-approval-heading, .incident-approval-core-item, .incident-approval-context, .incident-approval-decision, .incident-approval-feedback { padding-right: 18px; padding-left: 18px; }
+  .incident-approval-core, .incident-approval-context, .incident-report-detail-pair { grid-template-columns: 1fr; }
+  .incident-approval-core-item + .incident-approval-core-item { border-top: 1px solid var(--line); border-left: 0; }
+  .incident-approval-context { gap: 16px; }
+  .incident-approval-context > div + div { padding: 16px 0 0; border-top: 1px solid var(--line); border-left: 0; }
+  .incident-approval-footnote { padding-right: 18px; padding-left: 18px; }
+  .incident-report-detail { padding-right: 18px; padding-left: 18px; }
   .incident-claim { grid-template-columns: 64px minmax(0, 1fr); gap: 11px; }
 
 }

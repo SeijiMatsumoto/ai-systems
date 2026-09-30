@@ -89,7 +89,15 @@ for grouping and candidacy. It has five expandable stages: log group
 membership, considered clusters and gate outcomes, Jev inputs and judgments,
 model tool choices and responses, and verification and saved outcome. The complete
 workflow payload is saved without a separate full-trace panel. The Result tab holds the final outcome and cited report,
-and opens automatically when the run ends. A collapsible React Flow architecture diagram shows the
+and opens automatically when the run ends. Verified reports open with a single
+decision brief: the trigger and observed impact, proposed cause, strongest
+supporting observations, and a key unresolved question. The full timeline,
+follow-up checks, and exact source records sit behind one disclosure. The
+approval prompt states that the engineer accepts the accuracy of the cited draft
+and uncertainty, not a confirmed root cause. Reviewers can approve the draft
+or request changes with a note. The decision
+is saved in the simulation payload and survives reload; the action does not
+change telemetry or trigger remediation. A collapsible React Flow architecture diagram shows the
 major components, deterministic and model boundaries, and the investigator's
 query ↔ evidence loop with scoped telemetry tools. The expanded agent stage
 shows each actual tool choice and response.
@@ -104,6 +112,14 @@ frontend streams this route and shows key decisions, candidate outcomes, tool
 results, reports, and stop reasons. Live calls require
 `TYPESAFE_API_KEY`; an accepted incident also calls the configured investigator
 model. The offline suite substitutes both providers.
+
+`POST /agent/incident_investigation/simulations/{run_id}/reviews/{incident_id}`
+records one decision for a verified saved report: `approved` or
+`changes_requested` with a required note. Repeat decisions return 409. Review
+data lives in the existing simulation JSON payload, so no new table or migration
+is needed; older saved runs begin with a pending review. This demo has no
+reviewer identity or access control, so approval is a recorded simulation
+decision, not an authorization for operational action.
 
 `telemetry.py` loads and validates the fixture, derives an investigation scope from the alert, and exposes four read-only queries: `search_logs`, `get_metric_series`, `inspect_trace`, and `list_changes`. They enforce service and time bounds, validate filters, cap results, and return source locators plus truncation or coverage-gap metadata. They are Python functions wrapped as agent tools, not HTTP routes yet.
 

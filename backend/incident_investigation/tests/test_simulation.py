@@ -641,6 +641,79 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(missing.status_code, 404)
 
+    async def test_engineer_review_decision_persists_on_saved_report(self) -> None:
+        outcome = await run_simulation(
+            store=self.store,
+            classifier=self.classify_labeled,
+            session_scope=self.sessions,
+            investigator_model=FunctionModel(self.investigator),
+        )
+        incident_id = outcome.detected_incidents[0].incident_id
+        path = (
+            f"/agent/incident_investigation/simulations/{outcome.run_id}"
+            f"/reviews/{incident_id}"
+        )
+        with patch(
+            "backend.incident_investigation.api.db_utils.get_session", self.sessions
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://testserver"
+            ) as client:
+                missing_note = await client.post(
+                    path, json={"decision": "changes_requested", "note": "  "}
+                )
+                approved = await client.post(
+                    path, json={"decision": "approved", "note": "Evidence reviewed"}
+                )
+                duplicate = await client.post(path, json={"decision": "approved"})
+                reloaded = await client.get(
+                    f"/agent/incident_investigation/simulations/{outcome.run_id}"
+                )
+        self.assertEqual(missing_note.status_code, 422)
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(duplicate.status_code, 409)
+        review = reloaded.json()["review_decisions"][incident_id]
+        self.assertEqual(review["decision"], "approved")
+        self.assertEqual(review["note"], "Evidence reviewed")
+        self.assertTrue(review["reviewed_at"])
+        with self.sessions() as session:
+            saved = session.get(IncidentSimulationOutput, outcome.run_id)
+            self.assertEqual(
+                saved.response_payload["review_decisions"][incident_id]["decision"],
+                "approved",
+            )
+
+    async def test_change_request_is_scoped_to_a_saved_report(self) -> None:
+        outcome = await run_simulation(
+            store=self.store,
+            classifier=self.classify_labeled,
+            session_scope=self.sessions,
+            investigator_model=FunctionModel(self.investigator),
+        )
+        path = f"/agent/incident_investigation/simulations/{outcome.run_id}/reviews"
+        with patch(
+            "backend.incident_investigation.api.db_utils.get_session", self.sessions
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://testserver"
+            ) as client:
+                missing = await client.post(
+                    f"{path}/not-an-incident",
+                    json={"decision": "changes_requested", "note": "Check the cause"},
+                )
+                requested = await client.post(
+                    f"{path}/{outcome.detected_incidents[0].incident_id}",
+                    json={"decision": "changes_requested", "note": "  Verify cause  "},
+                )
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(requested.status_code, 200)
+        self.assertEqual(
+            requested.json()["review_decisions"][
+                outcome.detected_incidents[0].incident_id
+            ]["note"],
+            "Verify cause",
+        )
+
     async def test_history_route_explains_missing_migration(self) -> None:
         missing_engine = create_engine(
             "sqlite+pysqlite:///:memory:",

@@ -52,7 +52,7 @@ const nodes: SystemNode[] = [
   node('triage', 492, 258, { category: 'CLASSIFIER OUTCOME', title: 'Dismiss or review', detail: 'No investigation launched', tone: 'outcome' }),
   node('investigator', 726, 258, { category: 'MODEL · AGENT', title: 'Investigator', detail: 'Choose query or draft report', tone: 'model' }),
   node('verifier', 960, 258, { category: 'DETERMINISTIC', title: 'Citation verifier', detail: 'Resolve evidence IDs and scope' }),
-  node('review', 1194, 258, { category: 'OUTPUT', title: 'Engineer review', detail: 'Cited report or explicit failure', tone: 'outcome' }),
+  node('review', 1194, 258, { category: 'OUTPUT', title: 'Engineer review', detail: 'Approve or request changes on a cited draft', tone: 'outcome' }),
   node('tools', 726, 492, { category: 'SCOPED TOOL SET', title: 'Telemetry query tools', detail: 'Read-only logs, metrics, traces, changes', tone: 'gate' }),
 ]
 

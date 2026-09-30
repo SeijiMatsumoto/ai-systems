@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { backfillCompany, getResearchRun, getResearchRuns, runResearch } from './api'
+import IncidentWorkspace from './IncidentWorkspace'
 import type {
   BackfillRequest,
   BackfillResult,
@@ -38,7 +39,7 @@ const TOOLS: ToolDefinition[] = [
     shortTitle: 'Incidents',
     category: 'Operations',
     description: 'Investigate service failures from bounded telemetry and produce a cited report.',
-    availability: 'planned',
+    availability: 'ready',
     flow: ['Alert and window', 'Telemetry queries', 'Evidence set', 'Cited report'],
     input: 'A service, alert ID, and investigation window over synthetic logs, metrics, traces, and deployments.',
     output: 'A timeline that separates facts, correlations, and hypotheses, with source locators and unknowns.',
@@ -238,7 +239,7 @@ function ToolRail({
       </nav>
       <div className="rail-footer">
         <span className="availability-dot ready" />
-        1 runnable · 4 architecture scaffolds
+        2 runnable · 3 architecture scaffolds
       </div>
     </aside>
   )
@@ -249,10 +250,10 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
     <section className="catalog-view">
       <div className="catalog-intro">
         <p className="section-kicker">Workbench</p>
-        <h1>Five AI system designs. One runnable demo.</h1>
+        <h1>Five AI system designs. Two runnable demos.</h1>
         <p>
           Compare the request flow, model boundary, and output of common interview systems.
-          The research agent is runnable; the other four are scoped architecture scaffolds.
+          Investigate a synthetic incident or run cited company research. Three other systems remain architecture scaffolds.
         </p>
       </div>
 
@@ -1072,6 +1073,7 @@ export default function App() {
         <ToolRail selectedId={selectedTool?.id ?? null} onSelect={navigateToTool} />
         <main className="workspace-canvas">
           {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
+          {selectedTool?.id === 'incident-investigation' && <IncidentWorkspace />}
           {selectedTool?.id === 'research' && <ResearchWorkspace />}
           {selectedTool?.availability === 'planned' && <SystemScaffold tool={selectedTool} />}
         </main>

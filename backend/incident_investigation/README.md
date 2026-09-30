@@ -1,6 +1,6 @@
 # Incident Investigation & Reporting Agent
 
-**Status:** synthetic telemetry fixture, read-only query layer, bounded investigator, citation checks, and backend API are implemented. The frontend execution path is pending.
+**Status:** runnable local demo with synthetic telemetry, read-only queries, a bounded investigator, citation checks, backend API, and an engineer-review frontend.
 
 ## Demo contract
 
@@ -21,11 +21,11 @@ The checked-in `fixtures/v1/` dataset covers a checkout error spike across gatew
 
 `agent.py` exposes those queries as typed tools for one Pydantic AI investigator. The model sees the alert, allowed services, available metric names, and declared coverage gaps, then chooses follow-up queries. Metric results are condensed to at most 12 exact points with evidence IDs. Python records each tool step and enforces an eight-call application budget plus model request/token/time limits. `verification.py` resolves cited IDs to source records, rejects IDs that were not surfaced or are outside scope, checks claim placement, orders the timeline, and discloses fixture coverage gaps. It does not establish that free-form claim text accurately interprets a source; engineer review is always required. A draft with no cited observations or failed checks fails the run.
 
-`POST /agent/incident_investigation` on `backend.main:app` accepts an alert, service, and time window. It returns the cited report or structured verification issues, run status, stop reason, tool steps, usage, and optional Logfire trace ID. The report and tool steps are response-only; `llm_runs` persists the run identity and state, not the report. There is no incident frontend yet.
+`POST /agent/incident_investigation` on `backend.main:app` accepts an alert, service, and time window. It returns the cited report or structured verification issues, run status, stop reason, tool steps, ordered workflow steps, usage, and optional Logfire trace ID. `POST /agent/incident_investigation/stream` emits each workflow step as a server-sent event followed by the same final response. The frontend uses the stream to show scope validation, run state, model context and instructions, tool choices and full fixture query results, draft output, citation verification, and stop state while the run progresses. It also shows the timeline, cited evidence excerpts and locators, coverage gaps, and engineer-review requirement. Model private reasoning and provider internals are not exposed in the UI; Logfire holds the detailed instrumented spans when enabled. The report and workflow trace are response-only; `llm_runs` persists the run identity and state, not the report. Reloading the page does not restore a report.
 
 The incident telemetry is the checked-in synthetic fixture, not data fetched from Logfire. The agent's tool steps are returned in memory. With a telemetry-write `LOGFIRE_API_KEY` (or `LOGFIRE_TOKEN`) and `LOGFIRE_SEND_TO_LOGFIRE=true`, the service exports its run span and records its trace ID in `llm_runs`. When export is disabled, that field remains empty. The shared backend setup also instruments Pydantic AI. Offline tests disable export and make no live model calls.
 
-The next phase will add a UI showing the timeline beside the tool trace and source excerpts.
+The next phase covers scenario checks and final portfolio documentation.
 
 ## Offline checks
 

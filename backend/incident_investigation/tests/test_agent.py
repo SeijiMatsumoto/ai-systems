@@ -4,7 +4,9 @@ import os
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from httpx import ASGITransport, AsyncClient
 from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
 from sqlalchemy import create_engine
@@ -15,6 +17,7 @@ os.environ["LOGFIRE_SEND_TO_LOGFIRE"] = "false"
 from backend.db.schemas import LlmRun
 from backend.incident_investigation.contracts import InvestigationRequest
 from backend.incident_investigation.service import run_investigation
+from backend.main import app
 
 
 def at(minute: int) -> str:
@@ -40,6 +43,87 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         with Session(self.engine) as session:
             yield session
             session.commit()
+
+    async def test_streaming_api_runs_fake_model_through_verification(self) -> None:
+        async def model_function(messages, info):
+            if len(messages) == 1:
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            "list_changes",
+                            {
+                                "inputs": {
+                                    "service": "payments",
+                                    "start": at(0),
+                                    "end": at(45),
+                                }
+                            },
+                        )
+                    ]
+                )
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "observations": [
+                                {
+                                    "statement": "Payments pool configuration changed.",
+                                    "kind": "fact",
+                                    "evidence_ids": ["changes-0002"],
+                                }
+                            ],
+                            "candidate_causes": [],
+                            "unknowns": [],
+                            "next_checks": [],
+                        },
+                    )
+                ]
+            )
+
+        async def fake_run(request, *, on_step):
+            return await run_investigation(
+                request,
+                session_scope=self.sessions,
+                model=FunctionModel(model_function),
+                on_step=on_step,
+            )
+
+        with patch("backend.incident_investigation.api.run_investigation", fake_run):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://testserver"
+            ) as client:
+                response = await client.post(
+                    "/agent/incident_investigation/stream",
+                    json=self.request.model_dump(mode="json"),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        events = []
+        for frame in response.text.split("\n\n"):
+            if not frame:
+                continue
+            lines = dict(line.split(": ", 1) for line in frame.splitlines())
+            events.append((lines["event"], json.loads(lines["data"])))
+        self.assertEqual(events[-1][0], "result")
+        result = events[-1][1]
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            result["report"]["timeline"][0]["evidence_ids"], ["changes-0002"]
+        )
+        self.assertEqual(
+            [payload for kind, payload in events if kind == "step"],
+            result["workflow_steps"],
+        )
+        tool_result = next(
+            payload
+            for kind, payload in events
+            if kind == "step" and payload["stage"] == "tool"
+        )
+        self.assertEqual(
+            tool_result["details"]["result"]["records"][0]["evidence_id"],
+            "changes-0002",
+        )
 
     async def test_mock_model_follows_cross_service_evidence_and_records_steps(
         self,
@@ -134,10 +218,12 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
                 ]
             )
 
+        streamed_steps = []
         outcome = await run_investigation(
             self.request,
             session_scope=self.sessions,
             model=FunctionModel(model_function),
+            on_step=streamed_steps.append,
         )
         self.assertEqual(
             outcome.status,
@@ -146,6 +232,24 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(outcome.stop_reason, "completed")
         self.assertEqual(len(outcome.tool_steps), 4)
+        self.assertEqual(streamed_steps, outcome.workflow_steps)
+        self.assertEqual(
+            [step.stage for step in outcome.workflow_steps[:4]],
+            ["scope", "registry", "registry", "agent"],
+        )
+        self.assertEqual(
+            [step.stage for step in outcome.workflow_steps[4:12]],
+            ["agent", "tool"] * 4,
+        )
+        self.assertEqual(
+            [step.stage for step in outcome.workflow_steps[-3:]],
+            ["agent", "verification", "registry"],
+        )
+        self.assertEqual(
+            outcome.workflow_steps[5].details["result"]["records"],
+            tool_results[0]["records"],
+        )
+        self.assertEqual(outcome.workflow_steps[-1].details["status"], "completed")
         self.assertEqual(outcome.tool_steps[-1].coverage_gaps[0].service, "payments")
         self.assertGreater(len(outcome.surfaced_evidence_ids), 5)
         self.assertLessEqual(len(tool_results[0]["records"]), 12)
@@ -232,6 +336,7 @@ class IncidentAgentTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.stop_reason, "timeout")
+        self.assertEqual(outcome.workflow_steps[-2].details["stop_reason"], "timeout")
         self.assertIsNone(outcome.draft)
         with Session(self.engine) as session:
             self.assertEqual(session.get(LlmRun, outcome.run_id).status, "failed")

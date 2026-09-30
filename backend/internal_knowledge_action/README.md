@@ -15,7 +15,7 @@ User identity -> ACL filter -> lexical + semantic search -> cited answer
              -> optional action proposal -> policy check -> approval -> execute
 ```
 
-The first runnable slice should use a small synthetic corpus with two users who have different access. A deterministic retrieval layer should filter by user/source ACL, rank results, and preserve exact locators. A mock action, such as creating a task, should remain a proposal until approved. The UI should show citations, the access boundary, and the approval transition.
+The first runnable slice should use a small synthetic corpus with two users who have different access. A deterministic retrieval layer should filter by user/source ACL, rank results, and preserve exact locators. A mock action, such as creating a task, should remain a proposal until approved. The UI should show the ordered access filter, retrieval inputs and results, answer synthesis, action checks, approval transition, and final state with exact source locators.
 
 ## Boundaries and acceptance
 

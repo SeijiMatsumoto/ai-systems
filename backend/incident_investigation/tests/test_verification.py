@@ -11,6 +11,7 @@ from backend.incident_investigation.agent import DraftClaim, InvestigationDraft
 from backend.incident_investigation.contracts import (
     InvestigationRequest,
     VerificationResult,
+    WorkflowStep,
 )
 from backend.incident_investigation.service import InvestigationExecution
 from backend.incident_investigation.telemetry import TelemetryStore
@@ -144,6 +145,70 @@ class ReportVerificationTests(unittest.TestCase):
 
 
 class IncidentApiTests(unittest.TestCase):
+    def test_stream_yields_steps_before_result(self) -> None:
+        step = WorkflowStep(
+            sequence=1,
+            stage="scope",
+            status="completed",
+            summary="Scope checked",
+            details={"service": "checkout"},
+            elapsed_ms=1,
+        )
+        outcome = InvestigationExecution(
+            run_id=uuid.uuid4(),
+            status="failed",
+            stop_reason="agent_error",
+            draft=None,
+            report=None,
+            verification=None,
+            tool_steps=[],
+            surfaced_evidence_ids=[],
+            logfire_trace_id=None,
+            usage={},
+            workflow_steps=[step],
+            error_type="RuntimeError",
+        )
+
+        async def fake_run(request: InvestigationRequest, *, on_step):
+            on_step(step)
+            return outcome
+
+        with patch("backend.incident_investigation.api.run_investigation", fake_run):
+            response = TestClient(app).post(
+                "/agent/incident_investigation/stream",
+                json={
+                    "service": "checkout",
+                    "alert_id": "alert-0001",
+                    "window_start": "2026-04-14T14:00:00Z",
+                    "window_end": "2026-04-14T14:59:00Z",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        frames = [frame for frame in response.text.split("\n\n") if frame]
+        self.assertEqual(len(frames), 2)
+        self.assertIn("event: step", frames[0])
+        self.assertIn('"service": "checkout"', frames[0])
+        self.assertIn("event: result", frames[1])
+        self.assertIn(str(outcome.run_id), frames[1])
+
+    def test_stream_reports_scope_error(self) -> None:
+        async def fake_run(request: InvestigationRequest, *, on_step):
+            raise ValueError("unknown alert ID")
+
+        with patch("backend.incident_investigation.api.run_investigation", fake_run):
+            response = TestClient(app).post(
+                "/agent/incident_investigation/stream",
+                json={
+                    "service": "checkout",
+                    "alert_id": "unknown",
+                    "window_start": "2026-04-14T14:00:00Z",
+                    "window_end": "2026-04-14T14:59:00Z",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("event: error", response.text)
+        self.assertIn("unknown alert ID", response.text)
+
     def test_route_serializes_cited_report(self) -> None:
         store = TelemetryStore()
         scope = store.scope_for_alert(

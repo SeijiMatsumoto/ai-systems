@@ -16,7 +16,7 @@ Issue -> repo map / lexical and symbol search -> targeted reads
       -> human review
 ```
 
-The first runnable slice should use one fixture issue with a small regression test. Tools should expose search, read, edit, and test operations within a disposable checkout. The runtime, rather than the model, should enforce allowed paths, execution limits, and network restrictions. The UI should show files inspected, edits made, test feedback, and the final diff.
+The first runnable slice should use one fixture issue with a small regression test. Tools should expose search, read, edit, and test operations within a disposable checkout. The runtime, rather than the model, should enforce allowed paths, execution limits, and network restrictions. The UI should show the ordered discovery, search, read, edit, and test steps with exact tool inputs and outputs, path checks, files inspected, test feedback, and the final diff.
 
 ## Boundaries and acceptance
 

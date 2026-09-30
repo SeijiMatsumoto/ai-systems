@@ -20,11 +20,11 @@ The user approved this overall sequence, not the implementation details of any p
 | 2A. Shared run registry | Minimal cross-system run ID, state, and Logfire trace ID | Reviewed and committed (`9444464`) |
 | 2B. Investigation loop | Bounded agent, tool steps, stop reason, and Logfire export | Reviewed and committed |
 | 3. Report and verification | Typed cited report, deterministic evidence checks, API response | Reviewed and committed |
-| 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Not planned in detail |
+| 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Reviewed and committed |
 | 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Not planned in detail |
 
 ## Current implementation
 
-As of 2026-09-29, `fixtures/v1/` and `telemetry.py` provide synthetic telemetry and four scoped Python queries. `agent.py` and `service.py` provide a bounded investigator using `backend/db/llm_runs.py`. `verification.py` constructs a cited report or structured failures, and `api.py` exposes it through the backend. Offline fake-model tests cover the agent and report checks. There is no incident frontend execution path. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.
+As of 2026-09-29, `fixtures/v1/` and `telemetry.py` provide synthetic telemetry and four scoped Python queries. `agent.py` and `service.py` provide a bounded investigator using `backend/db/llm_runs.py`. `verification.py` constructs a cited report or structured failures, and `api.py` exposes both a final-response route and a streaming workflow-step route. `frontend/src/IncidentWorkspace.tsx` submits the synthetic alert and renders live scope, registry, agent, tool, and verification steps, followed by the report, cited evidence, coverage gaps, failure state, and engineer-review requirement. Report and workflow steps remain response-only. Offline fake-model tests cover the agent, trace, and report checks; the frontend build and lint plus local mocked API preview cover the UI. Update this section and the phase table after each approved phase. Do not describe an unimplemented phase as runnable.
 
 Follow-up after incident work: connect `backend/research_workflow/` to `llm_runs` so its existing research runs can be found in the shared registry. Preserve research-specific payloads and behavior during that migration.

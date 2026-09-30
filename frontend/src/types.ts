@@ -133,3 +133,89 @@ export interface BackfillResult {
   failures: number
   filings: Array<Record<string, unknown>>
 }
+
+export interface InvestigationRequest {
+  service: string
+  alert_id: string
+  window_start: string
+  window_end: string
+}
+
+export interface IncidentClaim {
+  statement: string
+  kind: 'fact' | 'correlation' | 'hypothesis'
+  evidence_ids: string[]
+}
+
+export interface IncidentCoverageGap {
+  source: 'log' | 'metric' | 'trace' | 'change'
+  service: string
+  start: string
+  end: string
+  reason: string
+}
+
+export interface IncidentEvidence {
+  evidence_id: string
+  source: 'log' | 'metric' | 'trace' | 'change' | 'alert'
+  service: string
+  locator: string
+  observed_at: string
+  excerpt: string
+}
+
+export interface IncidentReport {
+  timeline: IncidentClaim[]
+  likely_causes: IncidentClaim[]
+  unknowns: string[]
+  next_checks: string[]
+  coverage_gaps: IncidentCoverageGap[]
+  evidence: IncidentEvidence[]
+  review_required: boolean
+}
+
+export interface IncidentVerificationIssue {
+  code: 'empty_report' | 'invalid_kind' | 'unknown_evidence' | 'not_surfaced' | 'outside_scope'
+  path: string
+  evidence_id: string | null
+}
+
+export interface IncidentVerification {
+  passed: boolean
+  issues: IncidentVerificationIssue[]
+}
+
+export interface IncidentToolStep {
+  sequence: number
+  tool_name: string
+  arguments: Record<string, unknown>
+  result: Record<string, unknown>
+  returned_evidence_ids: string[]
+  truncated: boolean
+  condensed: boolean
+  coverage_gaps: IncidentCoverageGap[]
+  error: string | null
+  duration_ms: number
+}
+
+export interface IncidentWorkflowStep {
+  sequence: number
+  stage: 'scope' | 'registry' | 'agent' | 'tool' | 'verification'
+  status: 'completed' | 'failed' | 'running'
+  summary: string
+  details: Record<string, unknown>
+  elapsed_ms: number
+}
+
+export interface InvestigationResult {
+  run_id: string
+  status: 'completed' | 'failed'
+  stop_reason: 'completed' | 'timeout' | 'budget_exhausted' | 'agent_error' | 'verification_failed'
+  report: IncidentReport | null
+  verification: IncidentVerification | null
+  tool_steps: IncidentToolStep[]
+  workflow_steps: IncidentWorkflowStep[]
+  logfire_trace_id: string | null
+  usage: Record<string, unknown>
+  error_type: string | null
+}

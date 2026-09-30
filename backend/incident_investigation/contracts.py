@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -57,3 +57,12 @@ class VerificationIssue(BaseModel):
 class VerificationResult(BaseModel):
     passed: bool
     issues: list[VerificationIssue]
+
+
+class WorkflowStep(BaseModel):
+    sequence: int
+    stage: Literal["scope", "registry", "agent", "tool", "verification"]
+    status: Literal["completed", "failed", "running"]
+    summary: str
+    details: dict[str, Any]
+    elapsed_ms: int

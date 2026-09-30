@@ -16,7 +16,7 @@ Customer identity -> conversation state -> policy retrieval + account lookup
                   -> customer response or human escalation
 ```
 
-The first runnable slice should use synthetic orders and policies. Read-only tools can look up orders and policy passages. One mock action, such as canceling an eligible order, should validate customer ownership and policy conditions before execution. The UI should show the policy citation, current account state, action decision, and escalation reason.
+The first runnable slice should use synthetic orders and policies. Read-only tools can look up orders and policy passages. One mock action, such as canceling an eligible order, should validate customer ownership and policy conditions before execution. The UI should show the ordered policy and account lookups with exact inputs and results, ownership and action checks, policy citation, action decision, and escalation reason.
 
 ## Boundaries and acceptance
 

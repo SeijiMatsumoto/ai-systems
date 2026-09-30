@@ -14,13 +14,14 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-`backend/research_workflow/` is the only runnable system through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, and a backend API, but its frontend remains an architecture view. The other three directories hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+Incident Investigation and Research & Workflow are runnable through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, a backend API, and an engineer-review workspace. Its report is response-only. The other three directories hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
 - Preserve a distinct architecture for each system. Implement the smallest demonstration that makes its central design decision visible in the UI and code.
 - Keep model judgment inside explicit boundaries: typed inputs and outputs, scoped tools, bounded loops, deterministic authorization/action checks, and evidence or test results that a viewer can inspect.
 - Make the result reviewable. Show source locators and citations for knowledge work, tool steps where they explain decisions, test output and diffs for coding, and approval or escalation state for actions.
+- For every runnable demo, show the ordered workflow in the UI as it happens: request and scope, model inputs and visible decisions, tool calls with exact arguments and results, deterministic checks, persistence or action state, and the final stop reason. Keep the trace visible with the completed result; persist it when run history is part of that demo. Identify model private reasoning and provider internals as unavailable rather than inventing steps. A saved Logfire trace can supplement the UI, but it does not replace the in-app walkthrough.
 - Use synthetic fixtures and mock services for new demos unless a real integration is essential to the architecture. Never use private repositories, real customer data, production telemetry, or external writes as demo fixtures.
 - Keep documentation and status labels aligned with what actually runs. When a scaffold becomes runnable, update its README, the root README, and the frontend description together. State limits plainly; do not claim live quality, reliability, or production readiness based on mocked checks.
 - Avoid adding a framework, agent, queue, or service solely for realism. Add complexity when it demonstrates a meaningful system boundary or failure mode.

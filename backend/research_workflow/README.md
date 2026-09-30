@@ -48,6 +48,8 @@ A grounding classifier checks each finding. A rejected finding receives at most 
 
 Research runs are saved with request, briefing, verification, usage, model/prompt/tool versions, trace ID, and checkpoint data. The request fingerprint includes the full `as_of` instant and workflow versions. The workflow has a 180-second timeout and concurrency limit; the agent has a 120-second timeout and request, tool-call, and token limits. A failed run can resume from the post-agent checkpoint. These controls demonstrate the shape of a bounded workflow, not a guarantee of live reliability.
 
+Follow-up for the portfolio-wide demo requirement: add an in-app ordered execution trace showing model-visible context, each selected tool with exact inputs and results, grounding and repair steps, checkpoint writes, and final state. The current UI shows the briefing, evidence, verification, and trace metadata, but not that full sequence.
+
 ## Local development
 
 Use Python 3.13, PostgreSQL with the `vector` extension, and the dependencies in `backend/requirements.txt`. Set `DATABASE_URL`, `OPENAI_API_KEY`, and `WORLD_NEWS_API_KEY` in `backend/.env`. Create the database schema with `backend.db.db_utils.init_db()` after enabling `vector`. The UI also needs Node and the dependencies in `frontend/package-lock.json`. See the [root README](../../README.md#run-the-backend-locally) for step-by-step backend and frontend commands.

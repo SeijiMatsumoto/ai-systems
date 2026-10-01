@@ -282,3 +282,57 @@ class ResearchRunStep(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False
     )
+
+
+class SupportDemoSession(Base):
+    """Opaque demo identity token; not production authentication."""
+
+    __tablename__ = "support_demo_sessions"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    customer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SupportConversation(Base):
+    __tablename__ = "support_conversations"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_demo_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    active_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("llm_runs.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SupportOutput(Base):
+    __tablename__ = "support_outputs"
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("llm_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    response_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

@@ -2,7 +2,7 @@
 
 from datetime import date
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -132,9 +132,22 @@ class PolicyPassage(Record):
     effective_on: date
 
 
+class PolicyRules(Record):
+    return_window_days: int = Field(strict=True, ge=1, le=365)
+    warranty_review_days: int = Field(strict=True, ge=1, le=3650)
+    cancellation_states: tuple[Literal["unfulfilled"], ...] = Field(
+        min_length=1, max_length=1
+    )
+    address_change_states: tuple[Literal["unfulfilled"], ...] = Field(
+        min_length=1, max_length=1
+    )
+    ai_refund_execution: Literal[False] = False
+
+
 class StoreFixture(Record):
     version: Identifier
     scenario_date: date
+    rules: PolicyRules
     customers: tuple[Customer, ...] = Field(min_length=1, max_length=10)
     products: tuple[Product, ...] = Field(min_length=1, max_length=30)
     orders: tuple[Order, ...] = Field(min_length=1, max_length=30)
@@ -178,6 +191,16 @@ class StoreFixture(Record):
         return self
 
 
+class OrderReview(Record):
+    days_since_delivery: int | None = Field(default=None, ge=0)
+    return_within_review_window: bool | None
+    warranty_within_review_window: bool | None
+    cancellation_state_eligible: bool
+    address_change_state_eligible: bool
+    human_review_required_for_return_or_refund: Literal[True] = True
+    action_executed: Literal[False] = False
+
+
 class OrderLookup(Record):
     status: Literal["found", "not_found"]
     order: Order | None = None
@@ -196,3 +219,144 @@ class RecordLookupRequest(Record):
 class CompatibilityRequest(Record):
     body_id: Identifier
     lens_id: Identifier
+
+
+class DemoSignIn(Record):
+    customer_id: Identifier
+
+
+class MessageRequest(Record):
+    message: Text
+
+
+class PolicySearchArgs(Record):
+    query: Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class OrderArgs(Record):
+    order_id: Identifier
+
+
+class ProductArgs(Record):
+    product_id: Identifier
+
+
+class EmptyArgs(Record):
+    pass
+
+
+class Intent(StrEnum):
+    INFORMATION = "information"
+    ACTION = "action"
+    HUMAN = "human"
+    UNSUPPORTED = "unsupported"
+
+
+class Judgment(Record):
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    model: Text
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntentJudgment(Record):
+    intent: Intent
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    model: Text
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+
+class Evidence(Record):
+    evidence_id: Identifier
+    kind: Literal["policy", "order", "catalog", "compatibility"]
+    source_id: Text
+    locator: Text
+    text: Annotated[str, Field(min_length=1, max_length=6000)]
+
+
+class Claim(Record):
+    text: Annotated[str, Field(min_length=1, max_length=1200)]
+    evidence_ids: tuple[Identifier, ...] = Field(min_length=1, max_length=6)
+
+
+class AnswerDraft(Record):
+    format: Literal["paragraph", "bullet_list", "numbered_list"] = "paragraph"
+    claims: tuple[Claim, ...] = Field(min_length=1, max_length=5)
+
+
+class ToolCall(Record):
+    name: Literal[
+        "policy_search",
+        "order_list",
+        "order_detail",
+        "catalog_list",
+        "product_detail",
+        "compatibility",
+    ]
+    arguments: dict = Field(default_factory=dict)
+
+
+class ModelTurn(Record):
+    decision: Annotated[str, Field(min_length=1, max_length=500)]
+    tool: ToolCall | None = None
+    answer: AnswerDraft | None = None
+    clarification: Annotated[str, Field(min_length=1, max_length=500)] | None = None
+
+    @model_validator(mode="after")
+    def one_output(self):
+        if (
+            sum(x is not None for x in (self.tool, self.answer, self.clarification))
+            != 1
+        ):
+            raise ValueError("Choose exactly one tool, answer, or clarification")
+        return self
+
+
+class ConversationTurn(Record):
+    order_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
+    product_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
+    question: Text
+    answer: Annotated[str, Field(max_length=6500)]
+
+
+class SupportStep(Record):
+    sequence: int = Field(ge=1)
+    stage: Identifier
+    details: dict = Field(default_factory=dict)
+
+
+class SupportResponse(Record):
+    run_id: Identifier
+    conversation_id: Identifier
+    disposition: Literal["answered", "clarification", "handoff_needed"]
+    answer: Annotated[str, Field(max_length=6500)]
+    stop_reason: Identifier
+    evidence: tuple[Evidence, ...] = ()
+    steps: tuple[SupportStep, ...] = ()
+    usage: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    embedding_model: str | None = None
+    fixture_version: Identifier
+
+
+class PolicyVector(Record):
+    policy_id: Identifier
+    locator: Identifier
+    text: Text
+    vector: tuple[float, ...] = Field(min_length=1, max_length=4096)
+
+
+class PolicyIndex(Record):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    embedding_model: Text
+    passages: tuple[PolicyVector, ...] = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def valid_vectors(self):
+        import math
+
+        dimensions = {len(x.vector) for x in self.passages}
+        keys = [(x.policy_id, x.locator) for x in self.passages]
+        if len(dimensions) != 1 or len(keys) != len(set(keys)):
+            raise ValueError("Index vectors/keys are inconsistent")
+        if any(not math.isfinite(v) for x in self.passages for v in x.vector):
+            raise ValueError("Nonfinite embedding")
+        return self

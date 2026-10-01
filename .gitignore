@@ -19,3 +19,6 @@ env/
 .vscode/
 .idea/
 .gemini/
+
+# Generated support policy embedding index
+backend/customer_support/.data/

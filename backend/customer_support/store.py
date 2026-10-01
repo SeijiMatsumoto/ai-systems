@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from string import Formatter
 
 from .contracts import (
     Compatibility,
@@ -9,6 +10,8 @@ from .contracts import (
     CompatibilityStatus,
     Order,
     OrderLookup,
+    OrderReview,
+    OrderState,
     PolicyPassage,
     Principal,
     Product,
@@ -25,7 +28,20 @@ class FixtureError(ValueError):
 
 class MockStore:
     def __init__(self, fixture: StoreFixture):
-        self.fixture = fixture
+        values = fixture.rules.model_dump()
+        values["cancellation_states"] = ", ".join(fixture.rules.cancellation_states)
+        values["address_change_states"] = ", ".join(fixture.rules.address_change_states)
+        passages = []
+        for passage in fixture.policies:
+            if any(
+                field and field not in values
+                for _, field, _, _ in Formatter().parse(passage.text)
+            ):
+                raise ValueError("Unknown policy rule placeholder")
+            passages.append(
+                passage.model_copy(update={"text": passage.text.format(**values)})
+            )
+        self.fixture = fixture.model_copy(update={"policies": tuple(passages)})
 
     @classmethod
     def load(cls, path: Path = DEFAULT_FIXTURE):
@@ -92,3 +108,26 @@ class CustomerStore:
         order_id = RecordLookupRequest(record_id=order_id).record_id
         order = next((o for o in self.orders() if o.order_id == order_id), None)
         return OrderLookup(status="found" if order else "not_found", order=order)
+
+
+def review_order(order: Order, store: MockStore) -> OrderReview:
+    """Read-only rule evaluation. These flags are not approval or execution."""
+    rules = store.fixture.rules
+    days = (
+        (store.fixture.scenario_date - order.delivered_on).days
+        if order.delivered_on
+        else None
+    )
+    return OrderReview(
+        days_since_delivery=days,
+        return_within_review_window=days <= rules.return_window_days
+        if days is not None
+        else None,
+        warranty_within_review_window=days <= rules.warranty_review_days
+        if days is not None
+        else None,
+        cancellation_state_eligible=order.state == OrderState.PAID
+        and order.fulfillment.value in rules.cancellation_states,
+        address_change_state_eligible=order.state == OrderState.PAID
+        and order.fulfillment.value in rules.address_change_states,
+    )

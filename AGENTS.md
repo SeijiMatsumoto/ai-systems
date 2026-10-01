@@ -14,7 +14,7 @@ The five systems are:
 | Customer Support | `backend/customer_support/` | Policy versus account state, checked actions, escalation |
 | Research & Workflow | `backend/research_workflow/` | Autonomous source selection, cited findings, verification, saved run |
 
-Incident Investigation, Research & Workflow, and the read-only Internal Knowledge assistant are runnable through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, a backend API, and an engineer-review workspace. Simulations save their responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID; the older alert-first route remains response-only. Knowledge + Action has synthetic ingestion, ACL-scoped retrieval, bounded cited answers, deterministic citation checks, Jev grounding, and saved steps. Its default mock embeddings demonstrate the retrieval boundary, not real semantic quality. Approval-gated actions remain planned. Coding Agent and Customer Support hold design briefs and proposed contracts. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
+Incident Investigation, Research & Workflow, and the read-only Internal Knowledge assistant are runnable through the frontend. Incident Investigation has a synthetic fixture, scoped Python queries, a bounded investigator, citation checks, a backend API, and an engineer-review workspace. Simulations save their responses and workflow steps in `incident_simulation_outputs`, keyed by the shared `llm_runs` ID; the older alert-first route remains response-only. Knowledge + Action has synthetic ingestion, ACL-scoped retrieval, bounded cited answers, deterministic citation checks, Jev grounding, and saved steps. Its default mock embeddings demonstrate the retrieval boundary, not real semantic quality. Approval-gated actions remain planned. Coding Agent holds a design brief and proposed contracts. Customer Support has a read-only conversation backend with scoped store tools, policy hybrid retrieval, Jev routing/grounding, saved outputs under shared `llm_runs`, and progress events; its frontend and action/case execution remain planned. Migration 009 and explicit policy ingestion are required for its API, and live quality remains unverified. Do not describe an incomplete system as a working end-to-end UI. See each system's `README.md` for its intended flow and acceptance bar; see the root `README.md` for the current portfolio map.
 
 ## How to extend a system
 
@@ -65,6 +65,7 @@ Use offline checks for ordinary code changes. **Do not run real LLM calls during
 ```sh
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/research_workflow/tests -v
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/internal_knowledge_action/tests -v
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/customer_support/tests -v
 cd frontend && npm run build && npm run lint && npm test
 ```
 

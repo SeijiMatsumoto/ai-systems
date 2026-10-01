@@ -18,8 +18,8 @@ Conversation context, traces, and evaluations are cross-cutting requirements fro
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1. Domain and mock store foundation | Typed domain contracts, synthetic catalog/order/policy fixtures, and scoped deterministic store adapter | Reviewed; uncommitted |
-| 2. Read-only support answers | Request prechecks, bounded intent classification, policy/account/catalog tools, grounded response and citation verification | Plan awaiting review |
+| 1. Domain and mock store foundation | Typed domain contracts, synthetic catalog/order/policy fixtures, and scoped deterministic store adapter | Committed as `5f82918` |
+| 2. Read-only support answers | Request prechecks, bounded intent classification, policy/account/catalog tools, grounded response and citation verification | Reviewed; commit approved |
 | 3. Checked support actions | Confirmed pre-fulfillment cancellation/address-change proposals and human-review case creation for returns, warranty, damage, and refund requests | Not started |
 | 4. Reviewable demo experience | Chat UI, role/session selection, visible ordered workflow, saved conversation/run trace, and architecture diagram | Not started |
 
@@ -69,13 +69,13 @@ No LLM/Jev classification, chat endpoint or UI, conversation persistence, action
 
 ### Phase 1 review gate
 
-Phase 1 implementation is complete and uncommitted, awaiting user review. Fourteen offline tests passed, covering strict request/lookup arguments, fixture references and dates, cross-customer isolation, order states, separate policy/account reads, known/unknown compatibility, evidence requirements, and missing/malformed fixtures. Incompatible-result behavior uses a modified test fixture; catalog assertions only contain manufacturer-established pairings. Ruff checks and formatting were applied. No LLM/Jev calls were made. Tavily search/extraction was used once to establish manufacturer provenance, outside routine tests.
+Phase 1 implementation was reviewed and committed as `5f82918` before Phase 2 started. Fourteen offline tests passed, covering strict request/lookup arguments, fixture references and dates, cross-customer isolation, order states, separate policy/account reads, known/unknown compatibility, evidence requirements, and missing/malformed fixtures. Incompatible-result behavior uses a modified test fixture; catalog assertions only contain manufacturer-established pairings. Ruff checks and formatting were applied. No LLM/Jev calls were made. Tavily search/extraction was used once to establish manufacturer provenance, outside routine tests.
 
-Wait for implementation review and explicit commit approval before committing; wait for review before planning or starting Phase 2.
+Phase 1 review and commit gates were satisfied by the user.
 
 ## Phase 2 plan: read-only support conversation backend
 
-Phase 1 review was accepted by the user's instruction to move to Phase 2. Phase 1 changes remain uncommitted; that instruction does not authorize a commit. Phase 2 details await review.
+The user approved this Phase 2 plan and requested committing Phase 1 first. Phase 1 was committed as `5f82918`; Phase 2 implementation was reviewed and approved for commit.
 
 ### Goal and request flow
 
@@ -117,4 +117,6 @@ Server-owned demo session -> owned conversation + recent context
 
 ### Review gate
 
-Implement only after review of this Phase 2 plan. Present uncommitted changes and verification results for review before starting Phase 3 or committing.
+Phase 2 implementation was reviewed and approved for commit. Verification: 41 support offline tests, 35 existing Knowledge tests, and 3 shared run-registry tests passed. Support checks exercise strict inputs, typed policy rules and exact window boundaries, hybrid retrieval, index mismatch/missing/dimension failures, model and Jev adapter shapes, multi-tool evidence and usage, owned API persistence, follow-up context/fresh reads, one repair, confidence branches, numeric/action claim rejection, tool/token limits, and streamed provider failure/terminal persistence. Providers are fake; persistence uses isolated SQLite tables. Ruff and diff checks are required before review.
+
+Migration 009 is supplied but has not been applied to the configured PostgreSQL database; actual PostgreSQL migration execution and live OpenAI/Jev/embedding behavior remain unverified. No frontend changes or case/action execution are included. The Phase 2 review and commit gates are satisfied. Plan Phase 3 next; implementation requires review of its detailed plan.

@@ -17,3 +17,6 @@ Offline test:
 ```sh
 .venv/bin/python -m unittest discover -s backend/db/tests -v
 ```
+
+
+Customer Support creates a shared run for each message. `support_demo_sessions` binds an opaque demo session token to a synthetic customer; `support_conversations` scopes chat history to that session and reserves one active run; `support_outputs` stores the question and complete response/steps under the shared run ID. Migration `009_create_support_conversations.sql` creates these tables and indexes. It has not been applied to this checkout's configured PostgreSQL database. Offline API/persistence tests exercised the ORM against isolated SQLite tables; PostgreSQL migration execution remains unverified.

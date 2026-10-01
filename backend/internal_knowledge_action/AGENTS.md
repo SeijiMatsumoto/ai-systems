@@ -1,6 +1,6 @@
 # Internal Knowledge + Action work guide
 
-Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `21d5907`. Phase 2 was reviewed and committed as `c6196ce`. Phase 3 remains provisional; approval of this roadmap does not approve its implementation.
+Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `21d5907`. Phase 2 was reviewed and committed as `c6196ce`. Phase 3 was approved in conversation on 2026-09-30; this implementation is complete and awaiting user review before commit.
 
 ## Proposed direction
 
@@ -18,7 +18,7 @@ Follow the repository-root `AGENTS.md`. Phase 1 was reviewed and committed as `2
 | --- | --- | --- |
 | 1. Hybrid retrieval boundary | Versioned corpus, two demo personas, ingestion/upserts, embedded chunks, ACL-scoped lexical and vector retrieval, reranking, exact locators, retrieval eval | Reviewed and committed (`21d5907`) |
 | 2. Read-only cited answers | Bounded answer call, citation verification, saved run and steps, frontend walkthrough and answer | Reviewed and committed (`c6196ce`) |
-| 3. Approval-gated mock action | Typed proposal, deterministic policy, explicit approval state, idempotent mock execution, UI and scenario checks | Not implemented; requires its own plan and approval |
+| 3. Approval-gated mock action + Markdown answers | Jev intent classification after deterministic signals, typed task proposal, deterministic policy, explicit approval, idempotent mock execution, safe Markdown answer formatting, UI and scenario checks | Implemented; awaiting review |
 
 ## Phase 1 plan for review
 
@@ -81,6 +81,24 @@ A saved live run for “How do I request time off?” (`29fa725c-0f0e-4bb6-8564-
 ## Phase 3 acceptance target
 
 **Phase 3:** a natural-language action request can create only a proposal for one mock task type. Policy checks action type, arguments, requester scope, and approval state before execution; recheck policy at execution and use an idempotency key so repeated approval does not create duplicate tasks. Show approve/reject and blocked states in the UI and saved steps. Offline cases include permitted execution, unauthorized proposal, denied approval, repeated execution, and stale policy or source state. No external action API is needed for the portfolio slice.
+
+### Phase 3 approved implementation plan
+
+**Approval:** the user approved Phase 3 and separately requested Markdown output with numbered and bulleted lists.
+
+1. Add deterministic action keyword checks before a bounded Jev action-intent judgment; apply the threshold in application code. If Jev is unavailable, stop safely. Informational questions continue through the existing read-only path.
+2. For explicit actions, resolve the synthetic requester and ACL-filter retrieval before a typed proposal model call. Permit only `support_follow_up`; validate arguments, source IDs, ticket type, and requester scope deterministically. Save the proposal under the existing `llm_runs`-keyed answer output without creating a task.
+3. Add simulated approvers and approve/reject states. Recheck requester access and source revision on approval, then insert a task into a local table with a stable idempotency key. Do not call any external action API.
+4. Add answer format to the typed answer result (`paragraph`, `bullet_list`, `numbered_list`). Render Markdown through a shared React component with raw HTML disabled. Preserve one citation badge group per verified claim.
+5. Update the UI, API, architecture diagram, phase guide, and root/system READMEs. Add offline fakes for Jev, proposal generation, approval, persistence, policy denial, stale source, rejection, and repeated execution.
+
+**Verification:** backend tests cover deterministic signals before Jev, Jev threshold branching, ACL-filtered proposal inputs, provider failure, approver denial/rejection, current access and revision rechecks, idempotent replay, saved steps, and the existing read-only answer and citation boundaries. Frontend tests cover Markdown format propagation and proposal/approval presentation. Run Ruff, the knowledge-system unittest suite, frontend build/lint/tests, and `git diff --check`. No live provider calls.
+
+### Phase 3 implementation review
+
+The implementation adds a Jev intent classifier behind deterministic action signals and a 0.8 application threshold. An explicit action can produce only a typed support-follow-up proposal grounded in the requester's ACL-visible ticket passages. A verified read-only answer offers that action only when a cited ticket is authorized for the support persona; the suggested prompt is explicit, and still passes through Jev, deterministic policy, and human approval. The UI exposes simulated support-lead and engineering approvers; approval rechecks current source revision and ACL before creating one `knowledge_mock_tasks` row with a per-run idempotency key. Rejection, denied approver, provider failure, blocked access, and repeated approval are retained in the saved workflow. Markdown answer format is typed and rendered with raw HTML disabled; citations remain adjacent to each verified claim.
+
+Offline verification passed on 2026-09-30: 31 backend tests with fake providers; frontend build, lint, and 20 tests; Ruff check and format checks; and `git diff --check`. No live Jev or OpenAI calls were made. Migration 008 was later applied to the configured Neon database after a transient DNS failure; schema introspection confirmed the task columns, unique constraints, and foreign key to `knowledge_answer_outputs`. No task records were written during migration. The demo continues to use mock embeddings by default, simulated identities, and local task persistence; it is not a production authorization or task integration. This phase remains uncommitted and awaits review.
 
 ## Deferred decisions
 

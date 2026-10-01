@@ -14,13 +14,24 @@ import type {
 } from './types'
 import { readResearchStream } from './researchStream'
 import { readKnowledgeStream } from './knowledgeStream'
-import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
+import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 
 export function getKnowledgePersonas(): Promise<DemoPersona[]> {
   return apiRequest('/agent/internal_knowledge_action/personas')
+}
+
+export function getKnowledgeApprovers(): Promise<KnowledgeApprover[]> {
+  return apiRequest('/agent/internal_knowledge_action/approvers')
+}
+
+export function decideKnowledgeAction(runId: string, approverId: string, decision: 'approve' | 'reject'): Promise<KnowledgeAnswerResult> {
+  return apiRequest(`/agent/internal_knowledge_action/actions/${runId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ approver_id: approverId, decision }),
+  })
 }
 
 export function getKnowledgeIndexStatus(): Promise<KnowledgeIndexStatus> {

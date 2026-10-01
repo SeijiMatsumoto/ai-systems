@@ -8,12 +8,25 @@ export interface KnowledgeClaimView {
 export function presentKnowledgeAnswer(answer: KnowledgeAnswerResult) {
   const status = answer.status === 'failed'
     ? 'Run failed'
-    : answer.stop_reason === 'answered' ? 'Verified answer' : 'Abstained'
-  const title = answer.stop_reason === 'answered'
-    ? 'Answer'
-    : answer.stop_reason.replaceAll('_', ' ')
+    : answer.stop_reason === 'answered' ? 'Verified answer'
+      : answer.action_status === 'pending_approval' ? 'Awaiting approval'
+        : answer.action_status === 'executed' ? 'Mock task created'
+          : answer.action_status === 'rejected' ? 'Proposal rejected'
+            : answer.action_status === 'blocked' ? 'Action blocked' : 'Abstained'
+  const title = answer.action_proposal
+    ? 'Action proposal'
+    : answer.stop_reason === 'answered'
+      ? 'Answer'
+      : answer.stop_reason.replaceAll('_', ' ')
   const messages: Record<string, string> = {
     read_only_action_request: 'This read-only demo cannot perform an action.',
+    action_proposal_pending: 'Review the proposed support follow-up and approve or reject it below. No task exists yet.',
+    action_proposal_rejected: 'The authorized approver rejected this proposal.',
+    action_policy_blocked: 'Policy blocked the action because requester access, evidence, or source state did not pass checks.',
+    action_approval_denied: 'This approver is not authorized for the proposed action. The proposal remains pending.',
+    action_executed: 'The approved mock task was created. Repeated approval returns the same task.',
+    action_proposal_error: 'The proposal model failed; no task was created.',
+    action_intent_unavailable: 'The action intent check was unavailable, so no proposal was made.',
     no_relevant_passage: 'No authorized passage matched this question.',
     model_abstained: 'The answer model chose not to answer from the selected passages. Inspect the workflow to see what it received.',
     citation_rejected: 'The draft cited a passage that failed provenance checks.',
@@ -29,5 +42,5 @@ export function presentKnowledgeAnswer(answer: KnowledgeAnswerResult) {
       return evidence ? [evidence] : []
     }),
   }))
-  return { status, title, claims, message: messages[answer.stop_reason] ?? '' }
+  return { status, title, claims, message: messages[answer.stop_reason] ?? '', format: answer.answer_format }
 }

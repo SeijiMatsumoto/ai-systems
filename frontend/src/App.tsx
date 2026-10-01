@@ -78,11 +78,11 @@ const TOOLS: ToolDefinition[] = [
     category: 'Internal assistant',
     description: 'Answer questions from authorized synthetic documents with checked citations.',
     availability: 'ready',
-    flow: ['Ingest + index', 'User access gate', 'Hybrid retrieval', 'Verified cited answer'],
+    flow: ['Ingest + index', 'Deterministic checks → Jev', 'ACL hybrid retrieval', 'Cited answer or approved task'],
     input: 'A synthetic employee question over documents, a policy, and a support ticket.',
-    output: 'A cited read-only answer or explicit abstention with a saved workflow.',
-    boundary: 'ACL filtering precedes retrieval; citation provenance and Jev grounding precede final answers.',
-    firstSlice: 'Two demo personas with different source access. Action approval remains planned.',
+    output: 'A cited answer, explicit abstention, or approved mock support task with a saved workflow.',
+    boundary: 'Cheap deterministic checks precede Jev; ACL filtering precedes retrieval and proposal context; policy rechecks approval before idempotent execution.',
+    firstSlice: 'Two simulated personas, one support task type, explicit approval, and a local idempotent executor.',
     sourcePath: 'backend/internal_knowledge_action/',
   },
   {
@@ -254,7 +254,7 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
         <h1>Five AI system designs. Three runnable demos.</h1>
         <p>
           Compare the request flow, model boundary, and output of common interview systems.
-          Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Action approval, Coding Agent, and Customer Support remain planned.
+          Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Coding Agent and Customer Support remain planned.
         </p>
       </div>
 
@@ -287,13 +287,13 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
     <section className="scaffold-view">
       <div className="scaffold-heading">
         <span className="scaffold-number">{tool.number}</span>
-        <StatusPill status={tool.id === 'knowledge-action' ? 'Read-only demo' : 'Architecture scaffold'} />
+      <StatusPill status={tool.id === 'knowledge-action' ? 'Runnable demo' : 'Architecture scaffold'} />
       </div>
       <p className="section-kicker">{tool.category}</p>
       <h1>{tool.title}</h1>
       <p className="scaffold-description">{tool.description}</p>
 
-      <div className="scaffold-flow" aria-label={tool.id === 'knowledge-action' ? 'Implemented read-only request flow' : 'Intended request flow'}>
+      <div className="scaffold-flow" aria-label={tool.id === 'knowledge-action' ? 'Implemented knowledge and action request flow' : 'Intended request flow'}>
         {tool.flow?.map((step, index) => (
           <div className="scaffold-flow-step" key={step}>
             <span>{String(index + 1).padStart(2, '0')}</span>
@@ -311,7 +311,7 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
       {tool.id === 'knowledge-action' && <KnowledgeRetrievalPreview />}
       <p className="scaffold-note">
         {tool.id === 'knowledge-action'
-          ? 'Ingestion, retrieval, cited answers, and saved walkthroughs run. Approval-gated actions remain planned.'
+          ? 'Ingestion, retrieval, cited answers, and approval-gated mock support tasks run. Demo personas and approvers are simulated; task records stay local.'
           : 'Architecture and proposed contracts only. No agent or API is connected yet.'}
         {' '}See <code>{tool.sourcePath}README.md</code> in the repository.
       </p>

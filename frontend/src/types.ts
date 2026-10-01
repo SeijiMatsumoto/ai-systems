@@ -26,10 +26,30 @@ export interface KnowledgeAnswerResult {
   authorized_source_ids: string[]
   evidence: KnowledgeEvidence[]
   claims: Array<{ statement: string; evidence_ids: string[] }>
+  available_actions: Array<'support_follow_up'>
+  action_evidence_ids: string[]
+  answer_format: 'paragraph' | 'bullet_list' | 'numbered_list'
+  action_status: 'pending_approval' | 'rejected' | 'blocked' | 'executed' | null
+  action_proposal: null | {
+    task_type: 'support_follow_up'
+    title: string
+    description: string
+    evidence_ids: string[]
+    requester_persona_id: string
+    idempotency_key: string
+  }
+  mock_task: null | { task_id: string; task_type: 'support_follow_up'; title: string; description: string; source_id: string; idempotency_key: string; status: 'open'; created_at: string }
   verification: Array<{ claim_index: number; passed: boolean; reason: string; judgment: { probability: number; model: string } | null }>
   steps: KnowledgeStep[]
   usage: Record<string, unknown>
   error_type: string | null
+}
+
+export interface KnowledgeApprover {
+  approver_id: string
+  label: string
+  role: string
+  allowed_action_types: string[]
 }
 
 export interface KnowledgeAnswerSummary {

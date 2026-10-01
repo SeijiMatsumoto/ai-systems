@@ -1,9 +1,72 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { buildKnowledgeMockIndex, getKnowledgeAnswer, getKnowledgeAnswers, getKnowledgeIndexStatus, getKnowledgePersonas, previewKnowledgeRetrieval, streamKnowledgeAnswer } from './api'
+import { buildKnowledgeMockIndex, decideKnowledgeAction, getKnowledgeAnswer, getKnowledgeAnswers, getKnowledgeApprovers, getKnowledgeIndexStatus, getKnowledgePersonas, previewKnowledgeRetrieval, streamKnowledgeAnswer } from './api'
 import { CitationTooltip } from './components/CitationTooltip'
-import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
+import { MarkdownContent } from './components/MarkdownContent'
+import TaskScroll from './TaskScroll'
+import { taskTrail } from './taskTrail'
+import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeEvidence, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
 import { presentKnowledgeAnswer } from './knowledgeAnswerPresentation'
+
+function CitationBadges({ citations }: { citations: KnowledgeEvidence[] }) {
+  return <span className="knowledge-answer-citations">{citations.map((item) => <CitationTooltip
+    key={item.evidence_id}
+    className="knowledge-citation-chip"
+    label={`${item.title} · ${item.evidence_id}`}
+    sourceTitle={item.title}
+    excerpt={item.excerpt}
+    metadata={[
+      { value: `${item.locator.source_id}@${item.locator.revision}:${item.locator.start}-${item.locator.end}`, code: true },
+      { label: 'Chunk', value: item.chunk_id, code: true },
+    ]}
+  />)}</span>
+}
+
+function describeKnowledgeStep(step: KnowledgeStep) {
+  if (step.stage === 'stop') {
+    const reason = String(step.details.stop_reason ?? '')
+    if (reason === 'action_proposal_pending') return 'Proposal ready · awaiting approval'
+    if (reason === 'answered') return 'Answer verified'
+    if (reason === 'action_executed') return 'Approved task created'
+    if (reason === 'action_proposal_rejected') return 'Proposal rejected'
+  }
+  if (step.stage === 'persistence') return 'Saved answer and workflow'
+  return step.summary
+}
+
+function KnowledgeClaims({ answer }: { answer: KnowledgeAnswerResult }) {
+  const view = presentKnowledgeAnswer(answer)
+  if (!view?.claims.length) return null
+  return <div className={`knowledge-answer-claim knowledge-answer-${view.format}`}>
+    {view.format === 'numbered_list' ? <ol>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></li>)}</ol>
+      : view.format === 'bullet_list' ? <ul>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></li>)}</ul>
+        : view.claims.map((claim, index) => <div key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></div>)}
+  </div>
+}
+
+function PreviousKnowledgeTurn({ answer }: { answer: KnowledgeAnswerResult }) {
+  const view = presentKnowledgeAnswer(answer)
+  return <>
+    <article className="knowledge-chat-message user-message">
+      <span className="knowledge-message-author">You</span>
+      <p>{answer.request.question}</p>
+    </article>
+    <article className="knowledge-chat-message assistant-message knowledge-previous-answer">
+      <div className="knowledge-assistant-heading">
+        <span className="knowledge-assistant-avatar" aria-hidden="true">KB</span>
+        <strong>Knowledge assistant</strong>
+        <span className="knowledge-assistant-status">{view.status}</span>
+      </div>
+      <KnowledgeClaims answer={answer} />
+      {answer.action_proposal && <section className="knowledge-action-history">
+        <strong>{answer.action_proposal.title}</strong>
+        <MarkdownContent>{answer.action_proposal.description}</MarkdownContent>
+        <span>{answer.action_status?.replaceAll('_', ' ')} · Open this run in Saved chats to review the proposal.</span>
+      </section>}
+      {answer.claims.length === 0 && !answer.action_proposal && <p className="knowledge-answer-abstain">{view.message}</p>}
+    </article>
+  </>
+}
 
 function setRunUrl(runId: string | null) {
   const url = new URL(window.location.href)
@@ -14,10 +77,14 @@ function setRunUrl(runId: string | null) {
 
 export default function KnowledgeRetrievalPreview() {
   const [personas, setPersonas] = useState<DemoPersona[]>([])
+  const [approvers, setApprovers] = useState<KnowledgeApprover[]>([])
+  const [approverId, setApproverId] = useState('jordan-support-lead')
   const [personaId, setPersonaId] = useState('')
-  const [question, setQuestion] = useState('How do I request time off?')
+  const [question, setQuestion] = useState('')
+  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null)
   const [preview, setPreview] = useState<KnowledgeRetrievalPreview | null>(null)
   const [answer, setAnswer] = useState<KnowledgeAnswerResult | null>(null)
+  const [previousTurns, setPreviousTurns] = useState<KnowledgeAnswerResult[]>([])
   const [liveSteps, setLiveSteps] = useState<KnowledgeStep[]>([])
   const [savedAnswers, setSavedAnswers] = useState<KnowledgeAnswerSummary[]>([])
   const [historyError, setHistoryError] = useState('')
@@ -26,17 +93,28 @@ export default function KnowledgeRetrievalPreview() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const requestSequence = useRef(0)
+  const transcriptRef = useRef<HTMLDivElement>(null)
   const answerView = answer ? presentKnowledgeAnswer(answer) : null
   const indexIsMock = indexStatus?.embedding_model === 'mock-embedding-v1'
   const noIndexChanges = buildReport && !buildReport.added_sources.length && !buildReport.updated_sources.length && !buildReport.removed_sources.length && !buildReport.acl_only_sources.length
+  const followUpEvidence = answer?.evidence.find((item) => answer.action_evidence_ids.includes(item.evidence_id) && answer.authorized_source_ids.includes(item.locator.source_id))
+  const workflowSteps = answer?.steps.length ? answer.steps : liveSteps
+  const progressItems = taskTrail(workflowSteps, describeKnowledgeStep)
+
+  useEffect(() => {
+    if (!answer && !submittedQuestion) return
+    const transcript = transcriptRef.current
+    if (transcript) transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' })
+  }, [answer, submittedQuestion])
 
   useEffect(() => {
     let active = true
-    Promise.all([getKnowledgePersonas(), getKnowledgeIndexStatus()]).then(([items, status]) => {
+    Promise.all([getKnowledgePersonas(), getKnowledgeIndexStatus(), getKnowledgeApprovers()]).then(([items, status, approverList]) => {
       if (!active) return
       setPersonas(items)
       setPersonaId((current) => current || items[0]?.persona_id || '')
       setIndexStatus(status)
+      setApprovers(approverList)
     }).catch((cause: unknown) => {
       if (active) setError(cause instanceof Error ? cause.message : 'Could not load demo personas')
     })
@@ -54,8 +132,10 @@ export default function KnowledgeRetrievalPreview() {
     if (runId) getKnowledgeAnswer(runId).then((saved) => {
       if (!active) return
       setAnswer(saved)
+      setPreviousTurns([])
       setPersonaId(saved.request.persona_id)
-      setQuestion(saved.request.question)
+      setQuestion('')
+      setSubmittedQuestion(saved.request.question)
     }).catch((cause: unknown) => {
       if (active) setHistoryError(cause instanceof Error ? cause.message : 'Could not open saved answer')
     })
@@ -66,6 +146,8 @@ export default function KnowledgeRetrievalPreview() {
     requestSequence.current += 1
     setPreview(null)
     setAnswer(null)
+    setPreviousTurns([])
+    setSubmittedQuestion(null)
     setLiveSteps([])
     setRunUrl(null)
     setError('')
@@ -74,10 +156,10 @@ export default function KnowledgeRetrievalPreview() {
 
   const runPreview = async () => {
     const sequence = ++requestSequence.current
+    if (!answer) setSubmittedQuestion(question.trim())
     setLoading(true)
     setError('')
     setPreview(null)
-    setAnswer(null)
     setLiveSteps([])
     setRunUrl(null)
     try {
@@ -90,9 +172,14 @@ export default function KnowledgeRetrievalPreview() {
     }
   }
 
-  const runAnswer = async () => {
+  const runAnswer = async (questionOverride?: string) => {
+    const submitted = (questionOverride ?? question).trim()
+    if (loading || !submitted || !personaId) return
     const sequence = ++requestSequence.current
     const runId = crypto.randomUUID()
+    if (answer) setPreviousTurns((previous) => [...previous, answer])
+    setSubmittedQuestion(submitted)
+    setQuestion('')
     setLoading(true)
     setError('')
     setAnswer(null)
@@ -100,7 +187,7 @@ export default function KnowledgeRetrievalPreview() {
     setLiveSteps([])
     setRunUrl(runId)
     try {
-      const completed = await streamKnowledgeAnswer(personaId, question, runId, (step) => {
+      const completed = await streamKnowledgeAnswer(personaId, submitted, runId, (step) => {
         if (sequence === requestSequence.current) setLiveSteps((previous) => [...previous, step])
       })
       if (sequence === requestSequence.current) {
@@ -124,10 +211,12 @@ export default function KnowledgeRetrievalPreview() {
       const saved = await getKnowledgeAnswer(runId)
       if (sequence !== requestSequence.current) return
       setAnswer(saved)
+      setPreviousTurns([])
       setLiveSteps([])
       setPreview(null)
       setPersonaId(saved.request.persona_id)
-      setQuestion(saved.request.question)
+      setQuestion('')
+      setSubmittedQuestion(saved.request.question)
       setRunUrl(runId)
     } catch (cause) {
       if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : 'Could not open saved answer')
@@ -151,105 +240,164 @@ export default function KnowledgeRetrievalPreview() {
     }
   }
 
+  const decideAction = async (decision: 'approve' | 'reject') => {
+    if (!answer) return
+    setLoading(true)
+    setError('')
+    try {
+      const updated = await decideKnowledgeAction(answer.run_id, approverId, decision)
+      setAnswer(updated)
+      getKnowledgeAnswers().then(setSavedAnswers).catch((cause: unknown) => {
+        setHistoryError(cause instanceof Error ? cause.message : 'Could not refresh saved answers')
+      })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not record approval')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const transcriptQuestion = answer?.request.question ?? submittedQuestion
+
   return (
-    <section className="knowledge-preview" aria-label="Access-filtered knowledge assistant">
-      <div className="knowledge-preview-intro">
-        <p className="section-kicker">Phase 2 · cited read-only answers</p>
-        <h2>Ask the knowledge base</h2>
-        <p>Answers use only passages this demo persona can read. Open the workflow to inspect retrieval, model context, citation checks, and Jev grounding.</p>
+    <>
+    <section className="knowledge-chat" aria-label="Internal knowledge assistant">
+      <header className="knowledge-chat-header">
+        <div className="knowledge-chat-heading">
+          <span className="knowledge-chat-mark" aria-hidden="true">KB</span>
+          <div>
+            <p className="section-kicker">Internal assistant</p>
+            <h2>Knowledge base</h2>
+            <p>Answers use only passages this demo persona can read.</p>
+          </div>
+        </div>
+        <div className="knowledge-chat-controls">
+          <label>
+            <span>Answer as</span>
+            <select value={personaId} onChange={(event) => { reset(); setPersonaId(event.target.value) }} disabled={!personas.length || loading}>
+              {personas.map((item) => <option key={item.persona_id} value={item.persona_id}>{item.label}</option>)}
+            </select>
+          </label>
+          {savedAnswers.length > 0 && <label>
+            <span>Saved chats</span>
+            <select value={answer?.run_id ?? ''} onChange={(event) => { if (event.target.value) void selectSavedAnswer(event.target.value) }} disabled={loading}>
+              <option value="">Recent conversations</option>
+              {savedAnswers.map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.question} · {item.stop_reason.replaceAll('_', ' ')}</option>)}
+            </select>
+          </label>}
+        </div>
+      </header>
+
+      <div className="knowledge-chat-index" role="status">
+        <span className={`knowledge-index-dot ${indexStatus?.ready ? 'ready' : ''}`} aria-hidden="true" />
+        <strong>{indexStatus === null ? 'Checking knowledge index…' : indexStatus.ready ? 'Knowledge index ready' : 'Knowledge index needs setup'}</strong>
+        {indexStatus && <span className="knowledge-chat-index-detail">{indexStatus.embedding_model ?? 'No embeddings'} · {indexStatus.source_count} sources · {indexStatus.chunk_count} chunks</span>}
+        <button type="button" onClick={() => { void buildIndex() }} disabled={loading}>{loading ? 'Working…' : 'Build fixture index'}</button>
       </div>
-      <div className="knowledge-index-status">
-        <strong>{indexStatus === null ? 'Checking index…' : indexStatus.ready ? 'Index ready' : 'Index not ready'}</strong>
-        {indexStatus && <span>{indexStatus.embedding_model ?? 'No embeddings'} · {indexStatus.source_count} sources · {indexStatus.chunk_count} chunks indexed</span>}
-        <button type="button" onClick={() => { void buildIndex() }} disabled={loading}>Build mock fixture index</button>
+      {(indexIsMock || buildReport) && <p className="knowledge-chat-note">{buildReport
+        ? noIndexChanges
+          ? `Index is current: ${buildReport.unchanged_sources.length} sources and ${buildReport.total_chunks} chunks reused.`
+          : `Index updated: ${buildReport.added_sources.length} added · ${buildReport.updated_sources.length} updated · ${buildReport.acl_only_sources.length} ACL only · ${buildReport.removed_sources.length} removed · ${buildReport.embedded_chunks} chunks embedded.`
+        : 'Mock vectors demonstrate retrieval wiring; they do not establish semantic search quality.'}</p>}
+      {historyError && <p className="knowledge-chat-error" role="status">Saved chats: {historyError}</p>}
+      {error && <p className="knowledge-chat-error" role="alert">{error}</p>}
+
+      <div className="knowledge-chat-transcript" aria-live="polite" ref={transcriptRef}>
+        {!transcriptQuestion && !preview && !loading && liveSteps.length === 0 && <div className="knowledge-chat-welcome">
+          <span className="knowledge-chat-welcome-mark" aria-hidden="true">KB</span>
+          <h3>What can I help you find?</h3>
+          <p>Ask about a policy, process, or support case. I’ll answer from passages this persona is allowed to read.</p>
+          <div className="knowledge-chat-suggestions" aria-label="Suggested questions">
+            {['How do I request time off?', 'What happens to a customer refund request?'].map((suggestion) => <button key={suggestion} type="button" disabled={loading || !indexStatus?.ready || !personaId} onClick={() => { void runAnswer(suggestion) }}>{suggestion}</button>)}
+          </div>
+        </div>}
+
+        {previousTurns.map((previousTurn) => <PreviousKnowledgeTurn key={previousTurn.run_id} answer={previousTurn} />)}
+
+        {transcriptQuestion && <article className="knowledge-chat-message user-message">
+          <span className="knowledge-message-author">You</span>
+          <p>{transcriptQuestion}</p>
+        </article>}
+
+        {(answer || loading || liveSteps.length > 0) && <article className="knowledge-chat-message assistant-message">
+          <div className="knowledge-assistant-heading">
+            <span className="knowledge-assistant-avatar" aria-hidden="true">KB</span>
+            <strong>Knowledge assistant</strong>
+            <span className={`knowledge-assistant-status ${loading ? 'is-running' : ''}`}>{answerView?.status ?? 'Working'}</span>
+          </div>
+          {loading && progressItems.length > 0 && <TaskScroll items={progressItems} active className="knowledge-chat-progress" />}
+          {loading && !answer && <p className="knowledge-chat-thinking">Checking authorized sources and citations…</p>}
+          {answer && <KnowledgeClaims answer={answer} />}
+          {answer?.available_actions.includes('support_follow_up') && !answer.action_proposal && <section className="knowledge-follow-up-suggestion" aria-label="Suggested follow-up action">
+            <div><strong>Need a next step?</strong><span>I can prepare a support follow-up from the cited ticket. You’ll review it before anything is created.</span></div>
+            <button type="button" disabled={loading || !followUpEvidence} onClick={() => {
+              if (followUpEvidence) void runAnswer(`Create a support follow-up based on the cited ticket “${followUpEvidence.title}”. Summarize the next step for the support team.`)
+            }}>Prepare follow-up</button>
+          </section>}
+          {answer?.action_proposal && <section className="knowledge-action-proposal">
+            <div className="knowledge-action-proposal-heading"><p className="section-kicker">Support follow-up</p><span className={`knowledge-action-status knowledge-action-status-${answer.action_status}`}>{answer.action_status === 'pending_approval' ? 'Awaiting approval' : answer.action_status?.replaceAll('_', ' ')}</span></div>
+            <h4>{answer.action_proposal.title}</h4>
+            <MarkdownContent>{answer.action_proposal.description}</MarkdownContent>
+            <div className="knowledge-action-citations"><CitationBadges citations={answer.action_proposal.evidence_ids.flatMap((id) => answer.evidence.filter((item) => item.evidence_id === id))} /></div>
+            <p className="knowledge-action-message">{answerView?.message}</p>
+            {answer.action_status === 'pending_approval' && <div className="knowledge-action-approval">
+              <label><span>Approver</span><select value={approverId} onChange={(event) => setApproverId(event.target.value)} disabled={loading}>{approvers.map((item) => <option key={item.approver_id} value={item.approver_id}>{item.label}</option>)}</select></label>
+              <div className="knowledge-action-buttons"><button type="button" className="primary-button" disabled={loading} onClick={() => { void decideAction('approve') }}>Approve task</button><button type="button" className="knowledge-reject-button" disabled={loading} onClick={() => { void decideAction('reject') }}>Reject</button></div>
+            </div>}
+            {answer.mock_task && <p className="knowledge-preview-meta" role="status">Created mock task {answer.mock_task.task_id} · {answer.mock_task.status} · {answer.mock_task.source_id}</p>}
+            <p className="knowledge-preview-meta">Demo approval only · no external task system</p>
+          </section>}
+          {answer && answer.claims.length === 0 && !answer.action_proposal && <p className="knowledge-answer-abstain">{answerView?.message}</p>}
+          {answer && <div className="knowledge-answer-footer">{answer.fixture_version && <>Fixture {answer.fixture_version} · {answer.embedding_model} · </>}{answer.authorized_source_ids.length} authorized sources</div>}
+        </article>}
       </div>
-      {indexIsMock && <p className="knowledge-preview-meta">This index uses mock vectors to demonstrate retrieval. They do not establish semantic search quality. The OpenAI embedding adapter is available through the explicit ingestion command.</p>}
-      {buildReport && <p className="knowledge-preview-meta" role="status">{noIndexChanges
-        ? `Index already up to date: ${buildReport.unchanged_sources.length} sources and ${buildReport.total_chunks} chunks reused; no new embeddings needed.`
-        : `Index updated: ${buildReport.added_sources.length} added · ${buildReport.updated_sources.length} updated · ${buildReport.acl_only_sources.length} ACL only · ${buildReport.removed_sources.length} removed · ${buildReport.embedded_chunks} new chunks embedded · ${buildReport.total_chunks} total chunks.`}</p>}
-      <form onSubmit={(event) => { event.preventDefault(); void runAnswer() }}>
-        <label>
-          <span>Demo persona</span>
-          <select value={personaId} onChange={(event) => { reset(); setPersonaId(event.target.value) }} disabled={!personas.length}>
-            {personas.map((item) => <option key={item.persona_id} value={item.persona_id}>{item.label}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Question</span>
-          <input value={question} maxLength={500} onChange={(event) => { reset(); setQuestion(event.target.value) }} />
-        </label>
-        <div className="knowledge-form-actions">
-          <button className="primary-button" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()} type="submit">
-            {loading ? 'Running…' : 'Answer with citations'}
-          </button>
-          <button type="button" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()} onClick={() => { void runPreview() }}>Inspect retrieval only</button>
+
+      <form className="knowledge-chat-composer" onSubmit={(event) => { event.preventDefault(); void runAnswer() }}>
+        <label className="knowledge-chat-input-label" htmlFor="knowledge-question">Message the knowledge base</label>
+        <textarea
+          id="knowledge-question"
+          value={question}
+          maxLength={500}
+          rows={2}
+          placeholder="Ask a question about a policy, process, or support case…"
+          onChange={(event) => { setPreview(null); setQuestion(event.target.value) }}
+          onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void runAnswer() } }}
+        />
+        <div className="knowledge-composer-footer">
+          <span>Enter to send · Shift+Enter for a new line</span>
+          <div>
+            <button type="button" className="knowledge-inspect-button" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()} onClick={() => { void runPreview() }}>Inspect retrieval</button>
+            <button className="primary-button" type="submit" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()}>{loading ? 'Working…' : 'Send'}</button>
+          </div>
         </div>
       </form>
-      <p className="knowledge-preview-meta">Answering calls the configured answer model and Jev. Retrieval-only inspection uses mock vectors when the mock index is selected.</p>
-      {savedAnswers.length > 0 && <label className="knowledge-history">
-        <span>Saved answers</span>
-        <select value={answer?.run_id ?? ''} onChange={(event) => { if (event.target.value) void selectSavedAnswer(event.target.value) }} disabled={loading}>
-          <option value="">Select a run</option>
-          {savedAnswers.map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.question} · {item.stop_reason.replaceAll('_', ' ')}</option>)}
-        </select>
-      </label>}
-      {historyError && <p className="knowledge-preview-meta" role="status">Saved history: {historyError}</p>}
-      {error && <p className="knowledge-preview-error" role="alert">{error}</p>}
-      {(answer || liveSteps.length > 0) && <div className="knowledge-answer-result">
-        <div className="knowledge-answer-header">
-          <p className="section-kicker">{answerView?.status ?? 'Working'}</p>
-          <h3>{answerView?.title ?? 'Checking sources and citations…'}</h3>
-          {answer?.error_type && <p>Recorded error: {answer.error_type}</p>}
-        </div>
-        {answerView?.claims.length ? <div className="knowledge-answer-claim">
-          <p>{answerView.claims.map((claim, index) => <span key={`${index}-${claim.statement}`}>
-            {index > 0 && ' '}{claim.statement}
-            <span className="knowledge-answer-citations">{claim.citations.map((item) => <CitationTooltip
-              key={item.evidence_id}
-              className="knowledge-citation-chip"
-              label={`${item.title} · ${item.evidence_id}`}
-              sourceTitle={item.title}
-              excerpt={item.excerpt}
-              metadata={[
-                { value: `${item.locator.source_id}@${item.locator.revision}:${item.locator.start}-${item.locator.end}`, code: true },
-                { label: 'Chunk', value: item.chunk_id, code: true },
-              ]}
-            />)}</span>
-          </span>)}</p>
-        </div> : null}
-        {answer && answer.claims.length === 0 && <p className="knowledge-answer-abstain">{answerView?.message}</p>}
-        {answer && <p className="knowledge-preview-meta">Fixture {answer.fixture_version ?? '—'} · {answer.embedding_model ?? '—'} · {answer.authorized_source_ids.length} authorized sources</p>}
-        <details className="knowledge-answer-walkthrough" open={loading}>
-          <summary>Workflow · {(answer?.steps ?? liveSteps).length} steps</summary>
-          <ol>{(answer?.steps ?? liveSteps).map((step) => <li key={step.sequence}>
-            <strong>{step.sequence}. {step.stage.replaceAll('_', ' ')} · {step.status}</strong>
-            <p>{step.summary}</p>
-            <details><summary>Inputs and results</summary><pre>{JSON.stringify(step.details, null, 2)}</pre></details>
-          </li>)}</ol>
-        </details>
-        {answer && <details className="knowledge-answer-walkthrough"><summary>Verification and usage</summary><pre>{JSON.stringify({ verification: answer.verification, usage: answer.usage }, null, 2)}</pre></details>}
-      </div>}
-      {preview && <div className="knowledge-preview-result">
-        <p className="knowledge-preview-meta">Fixture {preview.fixture_version} · {preview.embedding_model} · {preview.stop_reason.replaceAll('_', ' ')}</p>
-        <ol className="knowledge-preview-steps">
-          {preview.steps.map((step) => <li key={step.stage}>
-            <strong>{step.stage.replaceAll('_', ' ')}</strong>
-            <p>{step.detail}</p>
-            {step.source_ids.length > 0 && <code>{step.source_ids.join(' · ')}</code>}
-          </li>)}
-        </ol>
-        <div className="knowledge-candidates">
-          <div><h3>Keyword candidates</h3>{preview.lexical_candidates.length ? preview.lexical_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
-          <div><h3>Vector candidates</h3>{preview.vector_candidates.length ? preview.vector_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
-        </div>
-        <h3>Ranked authorized excerpts</h3>
-        {preview.ranked_excerpts.length === 0 && <p>No authorized source matched this question. This preview does not generate an answer.</p>}
-        {preview.ranked_excerpts.map((item) => <article className="knowledge-preview-source" key={item.chunk_id}>
-          <div><strong>{item.title}</strong><span>{item.kind} · keyword #{item.lexical_rank ?? '—'} · vector #{item.vector_rank ?? '—'}</span></div>
-          <blockquote>{item.excerpt}</blockquote>
-          <code>{item.locator.source_id}@{item.locator.revision}:{item.locator.start}-{item.locator.end}</code>
-        </article>)}
-      </div>}
+      <p className="knowledge-chat-disclaimer">Deterministic request checks run before Jev classification. Personas and approvers are simulated; mock task records stay in the local demo database.</p>
     </section>
+
+    {(answer || liveSteps.length > 0) && <section className="knowledge-run-details" aria-label="Run details">
+      <div className="knowledge-run-details-heading"><div><p className="section-kicker">Inspectable trace</p><h3>Workflow and verification</h3></div><span>{workflowSteps.length} steps</span></div>
+      <details className="knowledge-answer-walkthrough" open={loading}>
+        <summary>Workflow steps</summary>
+        <ol>{workflowSteps.map((step) => <li key={step.sequence}>
+          <strong>{step.sequence}. {step.stage.replaceAll('_', ' ')} · {step.status}</strong>
+          <p>{step.summary}</p>
+          <details><summary>Inputs and results</summary><pre>{JSON.stringify(step.details, null, 2)}</pre></details>
+        </li>)}</ol>
+      </details>
+      {answer && <details className="knowledge-answer-walkthrough"><summary>Verification and usage</summary><pre>{JSON.stringify({ verification: answer.verification, usage: answer.usage }, null, 2)}</pre></details>}
+    </section>}
+
+    {preview && <section className="knowledge-preview-result" aria-label="Retrieval inspection">
+      <p className="knowledge-preview-meta">Retrieval inspection · {preview.fixture_version} · {preview.embedding_model}</p>
+      <ol className="knowledge-preview-steps">{preview.steps.map((step) => <li key={step.stage}><strong>{step.stage.replaceAll('_', ' ')}</strong><p>{step.detail}</p>{step.source_ids.length > 0 && <code>{step.source_ids.join(' · ')}</code>}</li>)}</ol>
+      <div className="knowledge-candidates">
+        <div><h3>Keyword candidates</h3>{preview.lexical_candidates.length ? preview.lexical_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
+        <div><h3>Vector candidates</h3>{preview.vector_candidates.length ? preview.vector_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
+      </div>
+      <h3>Ranked authorized excerpts</h3>
+      {preview.ranked_excerpts.length === 0 && <p>No authorized source matched this question.</p>}
+      {preview.ranked_excerpts.map((item) => <article className="knowledge-preview-source" key={item.chunk_id}><div><strong>{item.title}</strong><span>{item.kind} · keyword #{item.lexical_rank ?? '—'} · vector #{item.vector_rank ?? '—'}</span></div><blockquote>{item.excerpt}</blockquote><code>{item.locator.source_id}@{item.locator.revision}:{item.locator.start}-{item.locator.end}</code></article>)}
+    </section>}
+    </>
   )
 }

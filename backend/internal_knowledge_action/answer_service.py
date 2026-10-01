@@ -1,6 +1,5 @@
-"""Saved read-only RAG flow with ACL, citation, and semantic support boundaries."""
+"""Saved knowledge answer and proposal flow with ACL and verification boundaries."""
 
-import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Any
@@ -11,6 +10,16 @@ from sqlalchemy.orm import Session
 from backend.db import db_utils
 from backend.db.llm_runs import complete_run, create_run, fail_run, start_run
 from backend.db.schemas import KnowledgeAnswerOutput
+from backend.internal_knowledge_action.action_intent import (
+    ACTION_THRESHOLD,
+    ActionIntentProvider,
+    LiveJevActionIntentProvider,
+    detect_action_signals,
+)
+from backend.internal_knowledge_action.action_model import (
+    ActionProposalProvider,
+    LiveActionProposalProvider,
+)
 from backend.internal_knowledge_action.answer_model import (
     ANSWER_INSTRUCTIONS,
     AnswerProvider,
@@ -24,6 +33,7 @@ from backend.internal_knowledge_action.contracts import (
     KnowledgeAnswerRequest,
     KnowledgeAnswerResult,
     KnowledgeStep,
+    KnowledgeTaskProposal,
     RetrievalFixture,
     RetrievalPreviewRequest,
     SelectedEvidence,
@@ -50,12 +60,6 @@ from backend.internal_knowledge_action.retrieval import (
 
 SessionScope = Callable[[], AbstractContextManager[Session]]
 StepCallback = Callable[[KnowledgeStep], None]
-ACTION_REQUEST = re.compile(
-    r"^(?:please\s+)?(?:create|send|delete|assign|update|file|open)\b|"
-    r"^(?:can|could|would)\s+you\s+(?:please\s+)?"
-    r"(?:create|send|delete|assign|update|file|open)\b",
-    re.IGNORECASE,
-)
 
 
 def _embedder_for(index: IndexSnapshot) -> EmbeddingProvider:
@@ -99,6 +103,41 @@ def _verify_claim(
     return None
 
 
+def populate_available_actions(
+    result: KnowledgeAnswerResult, fixture: RetrievalFixture
+) -> None:
+    """Expose a follow-up only when the verified answer cites an in-scope ticket."""
+    result.available_actions = []
+    result.action_evidence_ids = []
+    if result.stop_reason != "answered":
+        return
+    persona = next(
+        (
+            item
+            for item in fixture.personas
+            if item.persona_id == result.request.persona_id
+        ),
+        None,
+    )
+    if persona is None or "support" not in persona.groups:
+        return
+    sources = {item.source_id: item for item in fixture.sources}
+    cited_ids = {
+        evidence_id for claim in result.claims for evidence_id in claim.evidence_ids
+    }
+    ticket_evidence_ids = [
+        item.evidence_id
+        for item in result.evidence
+        if item.evidence_id in cited_ids
+        and item.locator.source_id in result.authorized_source_ids
+        and sources.get(item.locator.source_id)
+        and sources[item.locator.source_id].kind == "ticket"
+    ]
+    if ticket_evidence_ids:
+        result.available_actions = ["support_follow_up"]
+        result.action_evidence_ids = ticket_evidence_ids
+
+
 async def run_answer(
     request: KnowledgeAnswerRequest,
     *,
@@ -109,6 +148,8 @@ async def run_answer(
     grounder: GroundingProvider | None = None,
     session_scope: SessionScope = db_utils.get_session,
     on_step: StepCallback | None = None,
+    action_classifier: ActionIntentProvider | None = None,
+    action_proposer: ActionProposalProvider | None = None,
 ) -> KnowledgeAnswerResult:
     steps: list[KnowledgeStep] = []
     run_id: UUID
@@ -143,18 +184,219 @@ async def run_answer(
     stage = "retrieval"
     try:
         question = normalize_question(request.question)
-        action_request = bool(ACTION_REQUEST.search(question))
+        signals = detect_action_signals(question)
         emit(
             "request_check",
             "completed",
-            "Validated read-only question",
-            {"question": question, "action_request_pattern": action_request},
+            "Validated request before any model call",
+            {"question": question, "length": len(question), "max_length": 500},
         )
-        if action_request:
-            result.status = "completed"
-            result.stop_reason = "read_only_action_request"
+        action_request = False
+        if signals:
+            emit(
+                "action_intent_signals",
+                "completed",
+                "Deterministic action keywords found",
+                {"signals": signals},
+            )
+            stage = "action_intent"
+            action_classifier = action_classifier or LiveJevActionIntentProvider()
+            emit(
+                "action_intent_classification",
+                "running",
+                "Jev classifies whether this is an explicit action request",
+                {
+                    "model": action_classifier.model_id,
+                    "request": question,
+                    "request_limit": 1,
+                },
+            )
+            judgment = await action_classifier.classify(question, signals)
+            result.usage["jev_action_intent"] = judgment.usage
+            action_request = judgment.probability >= ACTION_THRESHOLD
+            emit(
+                "action_intent_classification",
+                "completed",
+                "Applied application threshold to Jev decision",
+                {
+                    "judgment": judgment.model_dump(mode="json"),
+                    "threshold": ACTION_THRESHOLD,
+                    "explicit_action": action_request,
+                },
+            )
         else:
+            emit(
+                "action_intent_signals",
+                "completed",
+                "No action keywords found; skipped Jev classifier",
+                {"signals": []},
+            )
+        if action_request:
+            stage = "retrieval"
             fixture = fixture or load_fixture()
+            index = index or load_index()
+            if index is None or not index_matches_fixture(index, fixture):
+                raise ValueError("Build or refresh the fixture index first")
+            embedder = embedder or _embedder_for(index)
+            preview = preview_retrieval(
+                RetrievalPreviewRequest(
+                    persona_id=request.persona_id, question=question
+                ),
+                fixture,
+                index,
+                embedder,
+            )
+            persona = next(
+                (
+                    item
+                    for item in fixture.personas
+                    if item.persona_id == request.persona_id
+                ),
+                None,
+            )
+            sources = {item.source_id: item for item in fixture.sources}
+            ticket_evidence = [
+                SelectedEvidence(
+                    evidence_id=f"K{i}",
+                    chunk_id=item.chunk_id,
+                    title=item.title,
+                    excerpt=item.excerpt,
+                    locator=item.locator,
+                )
+                for i, item in enumerate(preview.ranked_excerpts, 1)
+                if sources.get(item.locator.source_id)
+                and sources[item.locator.source_id].kind == "ticket"
+            ]
+            result.fixture_version = fixture.version
+            result.embedding_model = index.embedding_model
+            result.authorized_source_ids = preview.authorized_source_ids
+            result.evidence = ticket_evidence
+            emit(
+                "access_filter",
+                "completed",
+                "Resolved requester identity and ACL scope before proposal model",
+                {
+                    "persona_id": request.persona_id,
+                    "source_ids": preview.authorized_source_ids,
+                },
+            )
+            emit(
+                "lexical_search",
+                "completed",
+                "Scored only ACL-authorized keyword candidates",
+                {
+                    "candidates": [
+                        item.model_dump(mode="json")
+                        for item in preview.lexical_candidates
+                    ]
+                },
+            )
+            emit(
+                "vector_search",
+                "completed",
+                "Scored only ACL-authorized vector candidates",
+                {
+                    "embedding_model": index.embedding_model,
+                    "candidates": [
+                        item.model_dump(mode="json")
+                        for item in preview.vector_candidates
+                    ],
+                },
+            )
+            emit(
+                "fusion_rerank",
+                "completed",
+                "Selected citable support-ticket excerpts for the proposal",
+                {
+                    "ranked_excerpts": [
+                        item.model_dump(mode="json") for item in preview.ranked_excerpts
+                    ],
+                    "ticket_evidence_ids": [
+                        item.evidence_id for item in ticket_evidence
+                    ],
+                },
+            )
+            allowed = (
+                persona is not None
+                and "support" in persona.groups
+                and bool(ticket_evidence)
+            )
+            emit(
+                "action_policy",
+                "completed" if allowed else "failed",
+                "Checked supported action, requester scope, and ticket evidence",
+                {
+                    "action_type": "support_follow_up",
+                    "requester_allowed": bool(persona and "support" in persona.groups),
+                    "ticket_evidence_ids": [
+                        item.evidence_id for item in ticket_evidence
+                    ],
+                    "allowed": allowed,
+                },
+            )
+            if allowed:
+                stage = "action_proposal"
+                action_proposer = action_proposer or LiveActionProposalProvider()
+                emit(
+                    "action_proposal_input",
+                    "completed",
+                    "Sent only ACL-authorized ticket evidence to typed proposal model",
+                    {
+                        "request": question,
+                        "evidence": [
+                            item.model_dump(mode="json") for item in ticket_evidence
+                        ],
+                        "model": action_proposer.model_id,
+                        "request_limit": 1,
+                    },
+                )
+                draft, usage = await action_proposer.propose(
+                    question, ticket_evidence, run_id
+                )
+                result.usage["action_proposal"] = usage
+                valid_ids = {item.evidence_id for item in ticket_evidence}
+                if (
+                    draft.task_type != "support_follow_up"
+                    or len(draft.evidence_ids) != len(set(draft.evidence_ids))
+                    or not set(draft.evidence_ids) <= valid_ids
+                    or not draft.title.strip()
+                    or not draft.description.strip()
+                ):
+                    result.stop_reason = "action_policy_blocked"
+                    result.action_status = "blocked"
+                    emit(
+                        "action_proposal_output",
+                        "failed",
+                        "Proposal failed deterministic type, field, or provenance checks",
+                        {"draft": draft.model_dump(mode="json")},
+                    )
+                else:
+                    source_id = ticket_evidence[0].locator.source_id
+                    result.action_proposal = KnowledgeTaskProposal(
+                        **draft.model_dump(),
+                        requester_persona_id=request.persona_id,
+                        idempotency_key=f"knowledge-action:{run_id}",
+                    )
+                    result.action_status = "pending_approval"
+                    result.stop_reason = "action_proposal_pending"
+                    result.status = "completed"
+                    emit(
+                        "action_proposal_output",
+                        "completed",
+                        "Validated task proposal; no task has been created",
+                        {
+                            "proposal": result.action_proposal.model_dump(mode="json"),
+                            "source_id": source_id,
+                        },
+                    )
+            else:
+                result.status = "completed"
+                result.action_status = "blocked"
+                result.stop_reason = "action_policy_blocked"
+        else:
+            stage = "retrieval"
+            fixture = fixture or load_fixture()
+            sources = {item.source_id: item for item in fixture.sources}
             index = index or load_index()
             if index is None or not index_matches_fixture(index, fixture):
                 raise ValueError("Build or refresh the fixture index first")
@@ -257,6 +499,7 @@ async def run_answer(
                     result.status = "completed"
                     result.stop_reason = "model_abstained"
                 else:
+                    result.answer_format = draft.format
                     catalog = {item.evidence_id: item for item in evidence}
                     checks = []
                     for rank, claim in enumerate(draft.claims):
@@ -350,16 +593,42 @@ async def run_answer(
                             result.claims = draft.claims
                             result.status = "completed"
                             result.stop_reason = "answered"
+                            populate_available_actions(result, fixture)
+                            emit(
+                                "action_availability",
+                                "completed",
+                                "Checked for follow-up actions supported by cited, authorized ticket evidence",
+                                {
+                                    "available_actions": result.available_actions,
+                                    "action_evidence_ids": result.action_evidence_ids,
+                                    "cited_ticket_source_ids": sorted(
+                                        {
+                                            item.locator.source_id
+                                            for item in evidence
+                                            if item.evidence_id
+                                            in result.action_evidence_ids
+                                        }
+                                    ),
+                                },
+                            )
     except Exception as exc:  # noqa: BLE001 - persist an inspectable failed run
-        result.status = "failed"
-        result.stop_reason = (
-            "answer_model_error" if stage == "answer_model" else "retrieval_error"
-        )
+        result.status = "completed" if stage == "action_intent" else "failed"
+        result.stop_reason = {
+            "answer_model": "answer_model_error",
+            "action_intent": "action_intent_unavailable",
+            "action_proposal": "action_proposal_error",
+        }.get(stage, "retrieval_error")
         result.error_type = type(exc).__name__
         emit(
-            "model_output" if stage == "answer_model" else "request_check",
+            "action_intent_classification"
+            if stage == "action_intent"
+            else "action_proposal_output"
+            if stage == "action_proposal"
+            else "model_output"
+            if stage == "answer_model"
+            else "request_check",
             "failed",
-            "Run failed before an answer could be verified",
+            "Run failed before a verified result could be saved",
             {"error_type": type(exc).__name__},
         )
 

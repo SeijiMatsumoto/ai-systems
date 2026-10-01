@@ -152,13 +152,63 @@ class SelectedEvidence(BaseModel):
 
 
 class AnswerClaimDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     statement: str = Field(min_length=1, max_length=500)
     evidence_ids: list[str] = Field(min_length=1, max_length=3)
 
 
 class AnswerDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     abstain: bool
+    format: Literal["paragraph", "bullet_list", "numbered_list"] = "paragraph"
     claims: list[AnswerClaimDraft] = Field(max_length=3)
+
+
+class TaskProposalDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: Literal["support_follow_up"]
+    title: str = Field(min_length=3, max_length=120)
+    description: str = Field(min_length=3, max_length=800)
+    evidence_ids: list[str] = Field(min_length=1, max_length=2)
+
+
+class KnowledgeTaskProposal(TaskProposalDraft):
+    requester_persona_id: str
+    idempotency_key: str
+
+
+class KnowledgeMockTask(BaseModel):
+    task_id: str
+    task_type: Literal["support_follow_up"]
+    title: str
+    description: str
+    source_id: str
+    idempotency_key: str
+    status: Literal["open"] = "open"
+    created_at: datetime
+
+
+class ActionApprover(BaseModel):
+    approver_id: str
+    label: str
+    role: str
+    allowed_action_types: list[str]
+
+
+class ActionDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approver_id: str = Field(min_length=1, max_length=50)
+    decision: Literal["approve", "reject"]
+
+
+class ActionIntentJudgment(BaseModel):
+    model: str
+    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    usage: dict[str, int] = Field(default_factory=dict)
 
 
 class GroundingJudgment(BaseModel):
@@ -179,6 +229,13 @@ class KnowledgeStep(BaseModel):
     sequence: int
     stage: Literal[
         "request_check",
+        "action_intent_signals",
+        "action_intent_classification",
+        "action_policy",
+        "action_proposal_input",
+        "action_proposal_output",
+        "action_approval",
+        "mock_task_execution",
         "access_filter",
         "lexical_search",
         "vector_search",
@@ -187,6 +244,7 @@ class KnowledgeStep(BaseModel):
         "model_output",
         "citation_check",
         "grounding",
+        "action_availability",
         "persistence",
         "stop",
     ]
@@ -208,6 +266,13 @@ class KnowledgeAnswerResult(BaseModel):
         "answer_model_error",
         "retrieval_error",
         "read_only_action_request",
+        "action_intent_unavailable",
+        "action_proposal_pending",
+        "action_proposal_rejected",
+        "action_policy_blocked",
+        "action_approval_denied",
+        "action_executed",
+        "action_proposal_error",
     ]
     request: KnowledgeAnswerRequest
     fixture_version: str | None = None
@@ -215,10 +280,18 @@ class KnowledgeAnswerResult(BaseModel):
     authorized_source_ids: list[str] = Field(default_factory=list)
     evidence: list[SelectedEvidence] = Field(default_factory=list)
     claims: list[AnswerClaimDraft] = Field(default_factory=list)
+    available_actions: list[Literal["support_follow_up"]] = Field(default_factory=list)
+    action_evidence_ids: list[str] = Field(default_factory=list)
     verification: list[ClaimVerification] = Field(default_factory=list)
     steps: list[KnowledgeStep] = Field(default_factory=list)
     usage: dict[str, Any] = Field(default_factory=dict)
     error_type: str | None = None
+    answer_format: Literal["paragraph", "bullet_list", "numbered_list"] = "paragraph"
+    action_status: (
+        Literal["pending_approval", "rejected", "blocked", "executed"] | None
+    ) = None
+    action_proposal: KnowledgeTaskProposal | None = None
+    mock_task: KnowledgeMockTask | None = None
 
 
 class KnowledgeAnswerSummary(BaseModel):

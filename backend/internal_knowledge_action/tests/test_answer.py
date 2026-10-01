@@ -11,14 +11,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from backend.db.schemas import KnowledgeAnswerOutput, LlmRun
+from backend.db.schemas import KnowledgeAnswerOutput, KnowledgeMockTask, LlmRun
+from backend.internal_knowledge_action.action_approval import decide_action
+from backend.internal_knowledge_action.action_intent import LiveJevActionIntentProvider
+from backend.internal_knowledge_action.action_model import LiveActionProposalProvider
 from backend.internal_knowledge_action.answer_model import LiveAnswerProvider
 from backend.internal_knowledge_action.answer_service import _verify_claim, run_answer
 from backend.internal_knowledge_action.contracts import (
+    ActionDecisionRequest,
     AnswerClaimDraft,
     AnswerDraft,
     GroundingJudgment,
     KnowledgeAnswerRequest,
+    TaskProposalDraft,
 )
 from backend.internal_knowledge_action.embedding import MockEmbeddingProvider
 from backend.internal_knowledge_action.grounding import LiveJevGroundingProvider
@@ -32,6 +37,7 @@ class FakeAnswerer:
     def __init__(self, draft: AnswerDraft | None = None, *, error: bool = False):
         self.draft = draft or AnswerDraft(
             abstain=False,
+            format="numbered_list",
             claims=[
                 AnswerClaimDraft(
                     statement="The manager approves time off.", evidence_ids=["K3"]
@@ -68,6 +74,44 @@ class FakeGrounder:
         )
 
 
+class FakeActionClassifier:
+    model_id = "fake-jev-intent"
+
+    def __init__(self, probability=0.95, error=False):
+        self.probability = probability
+        self.error = error
+        self.calls = []
+
+    async def classify(self, question, signals):
+        self.calls.append((question, signals))
+        if self.error:
+            raise RuntimeError("fake intent provider failed")
+        from backend.internal_knowledge_action.contracts import ActionIntentJudgment
+
+        return ActionIntentJudgment(
+            model=self.model_id, probability=self.probability, usage={"requests": 1}
+        )
+
+
+class FakeActionProposer:
+    model_id = "fake-proposal"
+
+    def __init__(self, error=False):
+        self.error = error
+        self.calls = []
+
+    async def propose(self, question, evidence, run_id):
+        self.calls.append((question, evidence, run_id))
+        if self.error:
+            raise RuntimeError("fake proposal failed")
+        return TaskProposalDraft(
+            task_type="support_follow_up",
+            title="Follow up on ticket 214",
+            description="Check the refund review and update the requester.",
+            evidence_ids=[evidence[0].evidence_id],
+        ), {"requests": 1, "input_tokens": 18}
+
+
 class FakeJevClient:
     def __init__(self):
         self.call = None
@@ -87,6 +131,25 @@ class FakeJevClient:
         )
 
 
+class FakeActionJevClient:
+    def __init__(self):
+        self.call = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def system_one(self, **kwargs):
+        self.call = kwargs
+        return SimpleNamespace(
+            model="fake-jev",
+            nouls={"explicit_action": SimpleNamespace(noul=0.87)},
+            usage=SimpleNamespace(model_dump=lambda: {"requests": 1}),
+        )
+
+
 class AnswerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.fixture = load_fixture()
@@ -99,6 +162,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         )
         LlmRun.__table__.create(self.engine)
         KnowledgeAnswerOutput.__table__.create(self.engine)
+        KnowledgeMockTask.__table__.create(self.engine)
 
         @contextmanager
         def sessions():
@@ -116,8 +180,16 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.engine.dispose()
 
     async def run_case(
-        self, persona_id, question, answerer=None, grounder=None, on_step=None
+        self,
+        persona_id,
+        question,
+        answerer=None,
+        grounder=None,
+        on_step=None,
+        action_classifier=None,
+        action_proposer=None,
     ):
+        classifier = action_classifier or FakeActionClassifier()
         return await run_answer(
             KnowledgeAnswerRequest(persona_id=persona_id, question=question),
             fixture=self.fixture,
@@ -127,6 +199,8 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
             grounder=grounder or FakeGrounder(),
             session_scope=self.sessions,
             on_step=on_step,
+            action_classifier=classifier,
+            action_proposer=action_proposer or FakeActionProposer(),
         )
 
     async def test_answer_is_cited_and_saved_with_ordered_steps(self):
@@ -138,6 +212,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.stop_reason, "answered")
+        self.assertEqual(result.answer_format, "numbered_list")
         self.assertEqual(result.claims[0].evidence_ids, ["K3"])
         self.assertEqual(
             [step.sequence for step in result.steps],
@@ -158,6 +233,7 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         with self.sessions() as session:
             stored = session.get(KnowledgeAnswerOutput, result.run_id)
             self.assertEqual(stored.response_payload["steps"][-1]["stage"], "stop")
+            self.assertEqual(stored.response_payload["answer_format"], "numbered_list")
             self.assertEqual(session.get(LlmRun, result.run_id).status, "completed")
 
     async def test_ticket_answer_is_access_scoped_and_denied_to_engineering(self):
@@ -179,11 +255,14 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(allowed.stop_reason, "answered")
         self.assertEqual(allowed.evidence[0].locator.source_id, "ticket-support-214")
+        self.assertEqual(allowed.available_actions, ["support_follow_up"])
+        self.assertEqual(allowed.action_evidence_ids, ["K1"])
         self.assertEqual(denied.stop_reason, "no_relevant_passage")
+        self.assertEqual(denied.available_actions, [])
         self.assertEqual(len(answerer.calls), 1)
         self.assertNotIn("ticket-support-214", denied.model_dump_json())
 
-    async def test_no_answer_and_action_precheck_skip_models(self):
+    async def test_no_answer_and_action_keyword_before_jev_decision(self):
         answerer = FakeAnswerer()
         grounder = FakeGrounder()
         empty = await self.run_case(
@@ -193,9 +272,157 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
             "alex", "Please send a refund now", answerer, grounder
         )
         self.assertEqual(empty.stop_reason, "no_relevant_passage")
-        self.assertEqual(action.stop_reason, "read_only_action_request")
+        self.assertEqual(action.stop_reason, "action_proposal_pending")
         self.assertEqual(answerer.calls, [])
         self.assertEqual(grounder.calls, [])
+        self.assertEqual(action.action_status, "pending_approval")
+        stages = [item.stage for item in action.steps]
+        self.assertLess(
+            stages.index("action_intent_signals"),
+            stages.index("action_intent_classification"),
+        )
+        self.assertLess(
+            stages.index("action_intent_classification"), stages.index("access_filter")
+        )
+
+    async def test_action_policy_approval_rejection_and_idempotent_execution(self):
+        action = await self.run_case(
+            "alex", "Create a support follow-up for ticket 214"
+        )
+        self.assertEqual(action.stop_reason, "action_proposal_pending")
+        self.assertIsNone(action.mock_task)
+        self.assertNotIn(
+            "ticket-support-214",
+            " ".join(item.locator.source_id for item in action.evidence)
+            if action.request.persona_id == "morgan"
+            else "",
+        )
+        with self.sessions() as session:
+            denied = decide_action(
+                session,
+                action.run_id,
+                ActionDecisionRequest(
+                    approver_id="morgan-engineer", decision="approve"
+                ),
+                self.fixture,
+            )
+        self.assertEqual(denied.stop_reason, "action_approval_denied")
+        self.assertEqual(denied.action_status, "pending_approval")
+        with self.sessions() as session:
+            executed = decide_action(
+                session,
+                action.run_id,
+                ActionDecisionRequest(
+                    approver_id="jordan-support-lead", decision="approve"
+                ),
+                self.fixture,
+            )
+        self.assertEqual(executed.action_status, "executed")
+        self.assertIsNotNone(executed.mock_task)
+        with self.sessions() as session:
+            repeated = decide_action(
+                session,
+                action.run_id,
+                ActionDecisionRequest(
+                    approver_id="jordan-support-lead", decision="approve"
+                ),
+                self.fixture,
+            )
+            self.assertEqual(session.query(KnowledgeMockTask).count(), 1)
+        self.assertEqual(repeated.mock_task.task_id, executed.mock_task.task_id)
+
+        rejected_proposal = await self.run_case(
+            "alex", "Create a support follow-up for ticket 214"
+        )
+        with self.sessions() as session:
+            rejected = decide_action(
+                session,
+                rejected_proposal.run_id,
+                ActionDecisionRequest(
+                    approver_id="jordan-support-lead", decision="reject"
+                ),
+                self.fixture,
+            )
+        self.assertEqual(rejected.action_status, "rejected")
+        self.assertIsNone(rejected.mock_task)
+
+    async def test_action_request_acl_denial_proposal_failure_and_stale_source(self):
+        denied = await self.run_case(
+            "morgan", "Create a support follow-up for ticket 214"
+        )
+        self.assertEqual(denied.stop_reason, "action_policy_blocked")
+        self.assertEqual(denied.evidence, [])
+        pending = await self.run_case(
+            "alex", "Create a support follow-up for ticket 214"
+        )
+        changed = self.fixture.model_copy(deep=True)
+        changed.sources = tuple(
+            item.model_copy(update={"revision": "changed"})
+            if item.source_id == "ticket-support-214"
+            else item
+            for item in changed.sources
+        )
+        with self.sessions() as session:
+            blocked = decide_action(
+                session,
+                pending.run_id,
+                ActionDecisionRequest(
+                    approver_id="jordan-support-lead", decision="approve"
+                ),
+                changed,
+            )
+        self.assertEqual(blocked.stop_reason, "action_policy_blocked")
+        failed = await self.run_case(
+            "alex",
+            "Create a support follow-up for ticket 214",
+            action_proposer=FakeActionProposer(error=True),
+        )
+        self.assertEqual(failed.stop_reason, "action_proposal_error")
+
+    async def test_action_intent_provider_failure_safely_stops(self):
+        answerer = FakeAnswerer()
+        result = await self.run_case(
+            "alex",
+            "Create a support follow-up for ticket 214",
+            answerer,
+            action_classifier=FakeActionClassifier(error=True),
+        )
+        self.assertEqual(result.stop_reason, "action_intent_unavailable")
+        self.assertEqual(answerer.calls, [])
+
+    async def test_action_approval_api_exposes_demo_roles_and_records_decision(self):
+        pending = await self.run_case(
+            "alex", "Create a support follow-up for ticket 214"
+        )
+        client = TestClient(app)
+        with patch(
+            "backend.internal_knowledge_action.api.db_utils.get_session", self.sessions
+        ):
+            approvers = client.get("/agent/internal_knowledge_action/approvers")
+            response = client.post(
+                f"/agent/internal_knowledge_action/actions/{pending.run_id}/decision",
+                json={"approver_id": "jordan-support-lead", "decision": "approve"},
+            )
+        self.assertEqual(approvers.status_code, 200)
+        self.assertEqual(len(approvers.json()), 2)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["action_status"], "executed")
+        self.assertEqual(
+            response.json()["mock_task"]["source_id"], "ticket-support-214"
+        )
+
+    async def test_informational_action_keyword_uses_jev_then_read_only_path(self):
+        classifier = FakeActionClassifier(probability=0.1)
+        answerer = FakeAnswerer()
+        result = await self.run_case(
+            "alex",
+            "How do I open the people portal?",
+            answerer,
+            action_classifier=classifier,
+        )
+        self.assertEqual(len(classifier.calls), 1)
+        self.assertEqual(result.stop_reason, "answered")
+        self.assertEqual(len(answerer.calls), 1)
 
     async def test_unknown_citation_is_rejected_before_jev(self):
         answerer = FakeAnswerer(
@@ -296,6 +523,37 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
             [item.model_dump(mode="json") for item in result.evidence],
         )
 
+    async def test_saved_ticket_answer_derives_follow_up_for_legacy_payload(self):
+        answerer = FakeAnswerer(
+            AnswerDraft(
+                abstain=False,
+                claims=[
+                    AnswerClaimDraft(
+                        statement="A support lead reviews the refund request.",
+                        evidence_ids=["K1"],
+                    )
+                ],
+            )
+        )
+        result = await self.run_case(
+            "alex", "What happens to a customer refund request?", answerer
+        )
+        with self.sessions() as session:
+            saved = session.get(KnowledgeAnswerOutput, result.run_id)
+            saved.response_payload.pop("available_actions", None)
+            saved.response_payload.pop("action_evidence_ids", None)
+            session.commit()
+
+        with patch(
+            "backend.internal_knowledge_action.api.db_utils.get_session", self.sessions
+        ):
+            detail = TestClient(app).get(
+                f"/agent/internal_knowledge_action/answers/{result.run_id}"
+            )
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["available_actions"], ["support_follow_up"])
+        self.assertEqual(detail.json()["action_evidence_ids"], ["K1"])
+
     async def test_stream_endpoint_emits_steps_and_terminal_saved_result(self):
         async def fake_run(request, *, on_step):
             return await run_answer(
@@ -360,6 +618,48 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             client.call["state"]["cited_passages"][0]["text"], selected[0].excerpt
         )
+
+    async def test_action_jev_and_proposal_adapters_are_bounded_and_typed(self):
+        client = FakeActionJevClient()
+        with patch(
+            "backend.internal_knowledge_action.action_intent.AsyncTypeSafeClient",
+            return_value=client,
+        ):
+            judgment = await LiveJevActionIntentProvider().classify(
+                "Please create a follow-up", ["create"]
+            )
+        self.assertEqual(judgment.probability, 0.87)
+        self.assertEqual(
+            client.call["state"]["deterministic_action_signals"], ["create"]
+        )
+        self.assertIn("explicit_action", client.call["questions"])
+
+        result = await self.run_case("alex", "What happens to ticket 214?")
+
+        class FakeAgent:
+            async def run(self, prompt, **kwargs):
+                self.prompt = prompt
+                self.kwargs = kwargs
+                return SimpleNamespace(
+                    output=TaskProposalDraft(
+                        task_type="support_follow_up",
+                        title="Follow up ticket 214",
+                        description="Check the queue.",
+                        evidence_ids=["K1"],
+                    ),
+                    usage=RunUsage(),
+                )
+
+        proposer = LiveActionProposalProvider.__new__(LiveActionProposalProvider)
+        proposer.agent = FakeAgent()
+        selected = result.evidence[:1]
+        draft, usage = await proposer.propose(
+            "Create a follow-up", selected, result.run_id
+        )
+        self.assertEqual(draft.task_type, "support_follow_up")
+        self.assertIn(selected[0].excerpt, proposer.agent.prompt)
+        self.assertEqual(proposer.agent.kwargs["usage_limits"].request_limit, 1)
+        self.assertIsInstance(usage, dict)
 
 
 if __name__ == "__main__":

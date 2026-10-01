@@ -1,4 +1,4 @@
-"""HTTP preview and saved read-only answers for synthetic knowledge."""
+"""HTTP retrieval, answer, and approval routes for the synthetic knowledge demo."""
 
 import asyncio
 import json
@@ -14,8 +14,14 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.db import db_utils
 from backend.db.schemas import KnowledgeAnswerOutput, LlmRun
-from backend.internal_knowledge_action.answer_service import run_answer
+from backend.internal_knowledge_action.action_approval import APPROVERS, decide_action
+from backend.internal_knowledge_action.answer_service import (
+    populate_available_actions,
+    run_answer,
+)
 from backend.internal_knowledge_action.contracts import (
+    ActionApprover,
+    ActionDecisionRequest,
     DemoPersona,
     IndexBuildReport,
     IndexStatus,
@@ -49,6 +55,29 @@ router = APIRouter(
 @router.get("/personas", response_model=list[DemoPersona])
 def list_demo_personas() -> list[DemoPersona]:
     return list(load_fixture().personas)
+
+
+@router.get("/approvers", response_model=list[ActionApprover])
+def list_demo_approvers() -> list[ActionApprover]:
+    """Return simulated approvers; these identities are not authentication."""
+    return [
+        ActionApprover(approver_id=key, **value) for key, value in APPROVERS.items()
+    ]
+
+
+@router.post("/actions/{run_id}/decision", response_model=KnowledgeAnswerResult)
+def decide_mock_action(
+    run_id: UUID, request: ActionDecisionRequest
+) -> KnowledgeAnswerResult:
+    try:
+        with db_utils.get_session() as session:
+            return decide_action(session, run_id, request, load_fixture())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        _history_schema_error(exc)
 
 
 @router.get("/index-status", response_model=IndexStatus)
@@ -113,7 +142,7 @@ def _history_schema_error(exc: SQLAlchemyError) -> Never:
     ):
         raise HTTPException(
             status_code=503,
-            detail="Knowledge run history is not set up. Apply database migration 007.",
+            detail="Knowledge run history or mock task storage is not set up. Apply migrations 007 and 008.",
         ) from exc
     raise exc
 
@@ -152,7 +181,9 @@ def get_answer(run_id: UUID) -> KnowledgeAnswerResult:
             saved = session.get(KnowledgeAnswerOutput, run_id)
             if saved is None:
                 raise HTTPException(status_code=404, detail="Knowledge run not found")
-            return KnowledgeAnswerResult.model_validate(saved.response_payload)
+            result = KnowledgeAnswerResult.model_validate(saved.response_payload)
+            populate_available_actions(result, load_fixture())
+            return result
     except SQLAlchemyError as exc:
         _history_schema_error(exc)
 

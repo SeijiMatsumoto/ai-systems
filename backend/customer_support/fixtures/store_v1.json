@@ -1,0 +1,297 @@
+{
+  "version": "camera-store-v1",
+  "scenario_date": "2026-10-01",
+  "customers": [
+    {
+      "customer_id": "customer-alex",
+      "display_name": "Alex (synthetic)"
+    },
+    {
+      "customer_id": "customer-sam",
+      "display_name": "Sam (synthetic)"
+    }
+  ],
+  "products": [
+    {
+      "product_id": "eos-r50",
+      "name": "Canon EOS R50",
+      "kind": "body",
+      "mount": "canon-rf",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "product_id": "eos-r8",
+      "name": "Canon EOS R8",
+      "kind": "body",
+      "mount": "canon-rf",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "product_id": "rf-s18-45",
+      "name": "Canon RF-S18-45mm F4.5-6.3 IS STM",
+      "kind": "lens",
+      "mount": "canon-rf",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "product_id": "rf24-50",
+      "name": "Canon RF24-50mm F4.5-6.3 IS STM",
+      "kind": "lens",
+      "mount": "canon-rf",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "product_id": "rf-s55-210",
+      "name": "Canon RF-S55-210mm F5-7.1 IS STM",
+      "kind": "lens",
+      "mount": "canon-rf",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "order-1001",
+      "customer_id": "customer-alex",
+      "state": "paid",
+      "fulfillment": "unfulfilled",
+      "placed_on": "2026-09-30",
+      "delivered_on": null,
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "eos-r50",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-1002",
+      "customer_id": "customer-alex",
+      "state": "paid",
+      "fulfillment": "label_created",
+      "placed_on": "2026-09-29",
+      "delivered_on": null,
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "rf-s55-210",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-1003",
+      "customer_id": "customer-alex",
+      "state": "paid",
+      "fulfillment": "shipped",
+      "placed_on": "2026-09-27",
+      "delivered_on": null,
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "rf24-50",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-1004",
+      "customer_id": "customer-alex",
+      "state": "paid",
+      "fulfillment": "delivered",
+      "placed_on": "2026-09-10",
+      "delivered_on": "2026-09-15",
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "eos-r8",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-1005",
+      "customer_id": "customer-alex",
+      "state": "paid",
+      "fulfillment": "delivered",
+      "placed_on": "2026-07-01",
+      "delivered_on": "2026-07-05",
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "rf24-50",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-2001",
+      "customer_id": "customer-sam",
+      "state": "paid",
+      "fulfillment": "unfulfilled",
+      "placed_on": "2026-09-30",
+      "delivered_on": null,
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "eos-r8",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    },
+    {
+      "order_id": "order-2002",
+      "customer_id": "customer-sam",
+      "state": "paid",
+      "fulfillment": "delivered",
+      "placed_on": "2025-06-01",
+      "delivered_on": "2025-06-05",
+      "address": {
+        "line1": "100 Demo Lane",
+        "city": "Exampleville",
+        "postal_code": "00000",
+        "country": "US"
+      },
+      "lines": [
+        {
+          "product_id": "eos-r50",
+          "quantity": 1,
+          "unit_price_cents": 50000
+        }
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "policy_id": "cancellation",
+      "revision": "v1",
+      "locator": "rules",
+      "title": "Order cancellation",
+      "text": "An order may be cancelled after customer confirmation only while paid and unfulfilled. A created shipping label closes this automatic cancellation route. Shipped or delivered orders require human review. Cancellation does not authorize the AI to issue a refund; payment adjustments are handled by a human.",
+      "effective_on": "2026-09-01"
+    },
+    {
+      "policy_id": "address",
+      "revision": "v1",
+      "locator": "rules",
+      "title": "Shipping address correction",
+      "text": "A customer may confirm a replacement US shipping address only before a shipping label is created. Confirm the full replacement address and recheck order state at execution. After label creation, create a case for human review; never promise carrier interception.",
+      "effective_on": "2026-09-01"
+    },
+    {
+      "policy_id": "returns",
+      "revision": "v1",
+      "locator": "rules",
+      "title": "Returns and refund review",
+      "text": "Customers may request return review within 30 calendar days after delivery. Record order ID, affected items, condition, and reason. Damaged or incorrect deliveries should be reported promptly with photographs when available. Create a human-review case, including requests outside the standard window. A case is not return approval or a refund promise. The AI cannot issue refunds.",
+      "effective_on": "2026-09-01"
+    },
+    {
+      "policy_id": "warranty",
+      "revision": "v1",
+      "locator": "rules",
+      "title": "Warranty and damaged equipment",
+      "text": "Create a human-review case with the order ID, affected product, symptoms, damage description, and supporting evidence. The retailer review window is one year from delivery for a reported equipment fault; eligibility and manufacturer coverage are verified by a human. Accidental damage is not automatically covered. Do not invent a manufacturer warranty or promise replacement.",
+      "effective_on": "2026-09-01"
+    },
+    {
+      "policy_id": "handoff",
+      "revision": "v1",
+      "locator": "rules",
+      "title": "Human support handoff",
+      "text": "Create a human-review case for an explicit human request, conflicting policy, an unsupported action, low confidence, or repeated tool failures. Include relevant conversation facts and source IDs, avoid unrelated personal data, and give the customer the case ID only after the case is saved.",
+      "effective_on": "2026-09-01"
+    }
+  ],
+  "compatibility": [
+    {
+      "body_id": "eos-r50",
+      "lens_id": "rf-s18-45",
+      "status": "compatible",
+      "explanation": "Canon explicitly offers this camera and lens pairing. This establishes basic pairing, not every feature or adapter combination.",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "body_id": "eos-r50",
+      "lens_id": "rf-s55-210",
+      "status": "compatible",
+      "explanation": "Canon explicitly offers this camera and lens pairing. This establishes basic pairing, not every feature or adapter combination.",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    },
+    {
+      "body_id": "eos-r8",
+      "lens_id": "rf24-50",
+      "status": "compatible",
+      "explanation": "Canon explicitly offers this camera and lens pairing. This establishes basic pairing, not every feature or adapter combination.",
+      "provenance": {
+        "source_url": "https://www.usa.canon.com/newsroom/2023/20230207-camera",
+        "checked_on": "2026-10-01",
+        "locator": "Pricing and availability: camera/lens kits"
+      }
+    }
+  ]
+}

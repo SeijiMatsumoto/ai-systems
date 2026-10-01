@@ -54,6 +54,7 @@ from backend.db.schemas import (
     SupportOutput,
     SupportProposal,
     SupportReceipt,
+    SupportTask,
 )
 from backend.internal_knowledge_action.embedding import MockEmbeddingProvider
 
@@ -228,10 +229,6 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             CostModel(
                 [
                     tool("order_list"),
-                    *[
-                        tool("order_detail", order_id=f"order-{number}")
-                        for number in range(1001, 1006)
-                    ],
                     list_answer,
                 ]
             ),
@@ -240,6 +237,19 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.disposition, "answered")
         self.assertEqual(result.steps[5].details["usage"]["cost"], "0.0003452")
         self.assertNotIn("failure", [step.stage for step in result.steps])
+
+    async def test_noncompliant_provider_cannot_execute_completed_order_read(self):
+        result = await self.run_case(
+            ScriptModel(
+                [tool("order_list"), tool("order_detail", order_id="order-1001")]
+            ),
+            question="Summarize the details of my orders.",
+        )
+        self.assertEqual(result.stop_reason, "unavailable_tool")
+        self.assertEqual(
+            [s.details["name"] for s in result.steps if s.stage == "tool_request"],
+            ["order_list"],
+        )
 
     async def test_multi_tool_policy_and_order(self):
         def draft(state):
@@ -725,6 +735,7 @@ class ApiTests(unittest.TestCase):
                     SupportProposal,
                     SupportReceipt,
                     SupportCase,
+                    SupportTask,
                 )
             ],
         )
@@ -1021,6 +1032,54 @@ class LiveAdapterTests(unittest.IsolatedAsyncioTestCase):
         import json
 
         json.dumps(counts)
+
+    async def test_available_tool_schema_excludes_completed_reads_and_repairs_invalid_name(
+        self,
+    ):
+        from pydantic_ai import Agent
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        from backend.customer_support.contracts import DecisionEnvelope
+
+        calls = 0
+
+        def respond(messages, info):
+            nonlocal calls
+            calls += 1
+            schema = json.dumps(info.output_tools[0].parameters_json_schema)
+            self.assertIn('"policy_search"', schema)
+            self.assertNotIn('"order_detail"', schema)
+            name = "order_detail" if calls == 1 else "policy_search"
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "action": {
+                                "kind": "tool",
+                                "decision": "Retrieve missing evidence",
+                                "tool": {
+                                    "name": name,
+                                    "arguments": {"query": "cancellation"},
+                                },
+                            }
+                        },
+                    )
+                ]
+            )
+
+        adapter = LiveSupportModel()
+        adapter.agent = Agent(
+            FunctionModel(respond), output_type=DecisionEnvelope, retries=1
+        )
+        output, usage = await adapter.turn(
+            {"tools": {"policy_search": {"query": "bounded text"}}}, "fake-run"
+        )
+        self.assertIsNotNone(output.tool)
+        assert output.tool is not None
+        self.assertEqual(output.tool.name, "policy_search")
+        self.assertEqual(usage["requests"], 2)
 
     async def test_mixed_output_repairs_once_through_real_adapter(self):
         from pydantic_ai import Agent

@@ -316,6 +316,26 @@ class SupportConversation(Base):
     )
 
 
+class SupportTask(Base):
+    __tablename__ = "support_tasks"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    last_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("llm_runs.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class SupportOutput(Base):
     __tablename__ = "support_outputs"
     run_id: Mapped[uuid.UUID] = mapped_column(
@@ -330,6 +350,9 @@ class SupportOutput(Base):
         index=True,
     )
     question: Mapped[str] = mapped_column(Text, nullable=False)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("support_tasks.id"), index=True
+    )
     response_payload: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"), nullable=False
     )

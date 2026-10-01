@@ -57,7 +57,7 @@ Cases hold the exact customer statement, owned order references, verified eviden
 
 ## Setup
 
-Apply `backend/db/migrations/009_create_support_conversations.sql` followed by `010_create_support_actions.sql` to an existing configured PostgreSQL database after migration 004. New database initialization includes the ORM tables. Migrations 009 and 010 were applied together to this checkout's configured database on October 1, 2026. All seven tables, ORM column names, foreign keys, and idempotency constraints were verified. Offline persistence tests use isolated SQLite tables.
+Apply `backend/db/migrations/009_create_support_conversations.sql` followed by `010_create_support_actions.sql` and `011_create_support_tasks.sql` to an existing configured PostgreSQL database after migration 004. New database initialization includes the ORM tables. Migrations 009 and 010 were applied together to this checkout's configured database on October 1, 2026. All seven tables, ORM column names, foreign keys, and idempotency constraints were verified. Offline persistence tests use isolated SQLite tables.
 
 Explicit policy ingestion:
 
@@ -110,3 +110,11 @@ LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m backend.customer_support.suppo
 ```
 
 Varied prompts exercise real support/Jev providers, streaming, saved conversations, proposals, review cases, and a ticket follow-up. Records use isolated in-memory SQLite and the existing explicitly ingested mock policy vectors. No proposal is confirmed. Full results and usage save to `/tmp/support-smoke.json`; this command is excluded from unittest discovery.
+
+## Resumable cancellation tasks
+
+Migration `011_create_support_tasks.sql` is required for this checkout's task-enabled API. It was applied and its columns verified on October 1, 2026. Each chat contains execution runs; cancellation work additionally has a persistent task checkpoint. Its goal, selected order references, pending clarification/proposal, completed check stages and evidence locators (run plus evidence IDs) survive a new API/repository instance. A follow-up loads that state rather than relying solely on four recent exchanges. Checkpoints are context, not current account evidence: proposals fetch fresh order/policy facts and confirmation rechecks state, ownership, version and policy.
+
+Clarification and approval pause the task. Nothing stays running while waiting. Approval uses the existing specific proposal endpoint; repeated chat replies cannot execute or create a duplicate pending cancellation. New task/checkpoint fields and created/resumed/saved events appear in the Admin walkthrough. Phase 1 supports explicit cancellation and short continuations; general topic routing, other action task types and reusable policy evidence are later phases. Crash recovery is limited to saved checkpoints; interrupted in-flight work is not automatically replayed.
+
+For resumed cancellation work with one saved owned target, the harness refreshes the order directly before model execution. The provider's output schema enumerates only available tools; completed order reads are removed, and application checks reject unavailable tool selections. An offline conversation regression reaches confirmation with two agent turns (policy selection and proposal) while retaining Jev and execution checks. This optimization has not yet been measured live.

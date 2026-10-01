@@ -1,5 +1,6 @@
 """Owned conversation persistence and transaction-scoped shared run lifecycle."""
 
+import re
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -11,9 +12,10 @@ from backend.db.schemas import (
     SupportConversation,
     SupportDemoSession,
     SupportOutput,
+    SupportTask,
 )
 
-from .contracts import ConversationTurn, SupportResponse, SupportStep
+from .contracts import ConversationTurn, SupportResponse, SupportStep, TaskCheckpoint
 from .store import MockStore
 
 
@@ -24,6 +26,147 @@ class ConversationBusy(ValueError):
 class SupportRepository:
     def __init__(self, session_factory):
         self.session_factory = session_factory
+
+    def task_for_message(self, token, conversation_id, run_id, message):
+        """Phase 1: explicit cancellation or a short reply to a waiting task.
+
+        The conversation reservation serializes checkpoint changes. Arbitrary
+        topic/continuation classification is deliberately left to phase 2.
+        """
+        with self.session_factory() as db:
+            _, conversation = self._owned(db, token, conversation_id)
+            if conversation.active_run_id != run_id:
+                raise ValueError("Task routing does not own reservation")
+            row = db.scalar(
+                select(SupportTask)
+                .where(SupportTask.conversation_id == conversation_id)
+                .order_by(SupportTask.created_at.desc(), SupportTask.id.desc())
+                .limit(1)
+            )
+            saved = TaskCheckpoint.model_validate(row.checkpoint) if row else None
+            waiting = saved and saved.status in {
+                "awaiting_clarification",
+                "awaiting_customer_decision",
+                "awaiting_approval",
+                "failed",
+            }
+            cancellation = bool(
+                re.search(r"\bcancel(?:lation|led|ing)?\b", message, re.IGNORECASE)
+            )
+            short_reply = bool(
+                re.fullmatch(
+                    r"(?:yes|no|please|that one|the first one|try again|retry)[,.! ]*",
+                    message.strip(),
+                    re.IGNORECASE,
+                )
+            )
+            explicit_orders = set(re.findall(r"\border-[a-zA-Z0-9-]+\b", message))
+            if (
+                saved
+                and explicit_orders
+                and saved.selected_order_ids
+                and not explicit_orders <= set(saved.selected_order_ids)
+            ):
+                waiting = False
+            if saved and saved.status == "awaiting_clarification":
+                short_reply = short_reply or bool(
+                    re.fullmatch(r"order-[a-zA-Z0-9-]+[.! ]*", message.strip())
+                )
+            if waiting and (cancellation or short_reply):
+                return saved, True
+            if not cancellation:
+                return None, False
+            checkpoint = TaskCheckpoint(task_id=str(uuid4()), goal=message[:1000])
+            db.add(
+                SupportTask(
+                    id=UUID(checkpoint.task_id),
+                    conversation_id=conversation_id,
+                    checkpoint=checkpoint.model_dump(mode="json"),
+                    last_run_id=run_id,
+                )
+            )
+            return checkpoint, False
+
+    @staticmethod
+    def checkpoint_result(db, conversation_id, response):
+        if response.task is None:
+            return response
+        row = db.get(SupportTask, UUID(response.task.task_id))
+        if row is None or row.conversation_id != conversation_id:
+            raise LookupError("Task not found")
+        saved = TaskCheckpoint.model_validate(row.checkpoint)
+        if saved.version != response.task.version:
+            raise ValueError("Stale task checkpoint")
+        status = (
+            "completed"
+            if response.receipt or response.review_case
+            else "awaiting_approval"
+            if response.pending_action
+            else "awaiting_approval"
+            if saved.status == "awaiting_approval"
+            else "failed"
+            if response.stop_reason in {"interrupted", "provider_or_validation_failure"}
+            else "awaiting_clarification"
+            if response.disposition == "clarification"
+            else "awaiting_customer_decision"
+        )
+        # Keep only cited targets, not every record fetched during discovery.
+        targets = tuple(
+            dict.fromkeys(e.source_id for e in response.evidence if e.kind == "order")
+        )
+        checkpoint = saved.model_copy(
+            update={
+                "status": status,
+                "version": saved.version + 1,
+                "selected_order_ids": targets or saved.selected_order_ids,
+                "pending_proposal_id": response.pending_action.proposal_id
+                if response.pending_action
+                else saved.pending_proposal_id,
+                "pending_question": response.answer
+                if status in {"awaiting_clarification", "awaiting_approval"}
+                else None,
+                "last_answer": response.answer,
+                "completed_steps": tuple(
+                    dict.fromkeys(
+                        [
+                            *saved.completed_steps,
+                            *[
+                                s.stage
+                                for s in response.steps
+                                if s.stage
+                                in {
+                                    "tool_result",
+                                    "citation_check",
+                                    "grounding_check",
+                                    "proposal_check",
+                                    "proposal_state_check",
+                                    "proposal_grounding_check",
+                                    "execution_recheck",
+                                }
+                            ],
+                        ]
+                    )
+                ),
+                "evidence_run_id": response.run_id
+                if response.evidence
+                else saved.evidence_run_id,
+                "evidence_ids": tuple(e.evidence_id for e in response.evidence)
+                if response.evidence
+                else saved.evidence_ids,
+            }
+        )
+        row.checkpoint = checkpoint.model_dump(mode="json")
+        row.last_run_id = UUID(response.run_id)
+        prior = list(response.steps[:-1])
+        prior.append(
+            SupportStep(
+                sequence=len(prior) + 1,
+                stage="task_checkpoint",
+                details=checkpoint.model_dump(mode="json"),
+            )
+        )
+        prior.append(response.steps[-1].model_copy(update={"sequence": len(prior) + 1}))
+        return response.model_copy(update={"task": checkpoint, "steps": tuple(prior)})
 
     def sign_in(self, store: MockStore, customer_id: str) -> UUID:
         store.sign_in(customer_id)
@@ -267,11 +410,13 @@ class SupportRepository:
                     )
                 )
                 response = response.model_copy(update={"steps": tuple(prior)})
+            response = self.checkpoint_result(db, conversation_id, response)
             db.add(
                 SupportOutput(
                     run_id=run_id,
                     conversation_id=conversation_id,
                     question=question,
+                    task_id=UUID(response.task.task_id) if response.task else None,
                     created_at=datetime.now(timezone.utc),
                     response_payload=response.model_dump(mode="json"),
                 )

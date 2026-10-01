@@ -2,9 +2,17 @@
 
 from datetime import date
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from functools import lru_cache
+from typing import Annotated, Any, Literal, Union, cast, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    create_model,
+    model_validator,
+)
 
 Identifier = Annotated[
     str, Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
@@ -464,6 +472,31 @@ class FinalDecisionEnvelope(Record):
         return ModelTurn.model_validate(self.action.model_dump(exclude={"kind"}))
 
 
+@lru_cache(maxsize=128)
+def scoped_decision_envelope(names: tuple[str, ...]) -> type[DecisionEnvelope]:
+    """Expose only tools that the harness has made available for this turn."""
+    if not names or not set(names) <= set(
+        get_args(ToolCall.model_fields["name"].annotation)
+    ):
+        raise ValueError("Invalid available tool names")
+    name_type: Any = cast(Any, Literal)[names]
+    call = create_model("AvailableToolCall", __base__=ToolCall, name=(name_type, ...))
+    decision = create_model(
+        "AvailableToolDecision", __base__=ToolDecision, tool=(call, ...)
+    )
+    branches: Any = cast(Any, Union)[
+        decision, AnswerDecision, ClarificationDecision, ProposalDecision
+    ]
+    return cast(
+        type[DecisionEnvelope],
+        create_model(
+            "AvailableDecisionEnvelope",
+            __base__=DecisionEnvelope,
+            action=(Annotated[branches, Field(discriminator="kind")], ...),
+        ),
+    )
+
+
 class ConversationTurn(Record):
     case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     proposal_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
@@ -477,6 +510,28 @@ class SupportStep(Record):
     sequence: int = Field(ge=1)
     stage: Identifier
     details: dict = Field(default_factory=dict)
+
+
+class TaskCheckpoint(Record):
+    task_id: Identifier
+    kind: Literal["cancel_order"] = "cancel_order"
+    status: Literal[
+        "active",
+        "awaiting_clarification",
+        "awaiting_customer_decision",
+        "awaiting_approval",
+        "completed",
+        "failed",
+    ] = "active"
+    goal: Annotated[str, Field(min_length=1, max_length=1000)]
+    selected_order_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
+    pending_proposal_id: Identifier | None = None
+    pending_question: Annotated[str, Field(max_length=6500)] | None = None
+    last_answer: Annotated[str, Field(max_length=6500)] = ""
+    version: int = Field(default=1, ge=1)
+    completed_steps: tuple[Identifier, ...] = Field(default=(), max_length=40)
+    evidence_run_id: Identifier | None = None
+    evidence_ids: tuple[Identifier, ...] = Field(default=(), max_length=30)
 
 
 class SupportResponse(Record):
@@ -503,6 +558,7 @@ class SupportResponse(Record):
     usage: dict[str, dict[str, Any]] = Field(default_factory=dict)
     embedding_model: str | None = None
     fixture_version: Identifier
+    task: TaskCheckpoint | None = None
 
 
 class PolicyVector(Record):

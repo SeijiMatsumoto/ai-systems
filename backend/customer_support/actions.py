@@ -477,6 +477,30 @@ def confirm(
             steps=steps,
             fixture_version=store.fixture.version,
         )
+        from backend.db.schemas import SupportTask
+
+        from .contracts import TaskCheckpoint
+
+        task = next(
+            (
+                t
+                for t in db.scalars(
+                    select(SupportTask).where(
+                        SupportTask.conversation_id == conversation_id
+                    )
+                )
+                if t.checkpoint.get("pending_proposal_id") == str(proposal_id)
+            ),
+            None,
+        )
+        if task:
+            result = repo.checkpoint_result(
+                db,
+                conversation_id,
+                result.model_copy(
+                    update={"task": TaskCheckpoint.model_validate(task.checkpoint)}
+                ),
+            )
         db.add(
             SupportReceipt(
                 id=UUID(receipt.receipt_id),
@@ -491,6 +515,7 @@ def confirm(
                 run_id=run.id,
                 conversation_id=conversation_id,
                 question=f"{decision.decision} proposal {proposal_id}",
+                task_id=UUID(result.task.task_id) if result.task else None,
                 response_payload=result.model_dump(mode="json"),
             )
         )

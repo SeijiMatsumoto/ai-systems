@@ -6,6 +6,8 @@ from typing import TypeVar
 from unittest.mock import patch
 from uuid import UUID
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import Session
@@ -21,6 +23,7 @@ from backend.customer_support.contracts import (
     Intent,
     ModelTurn,
 )
+from backend.customer_support.repository import SupportRepository
 from backend.customer_support.tests import test_workflow
 from backend.customer_support.tests.test_workflow import (
     FakeJudge,
@@ -38,6 +41,7 @@ from backend.db.schemas import (
     SupportOutput,
     SupportProposal,
     SupportReceipt,
+    SupportTask,
 )
 
 Row = TypeVar("Row", bound=Base)
@@ -50,13 +54,61 @@ def require_row(db: Session, model: type[Row], key: object) -> Row:
 
 
 class ActionTests(test_workflow.ApiTests):
+    def test_resumed_task_refreshes_target_without_model_discovery_turn(self):
+        self.runtime.judge = FakeJudge()
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        self.send("Can I cancel my unshipped camera order?")
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+        before = len(self.model.calls)
+
+        def proposal(state):
+            self.assertNotIn("order_detail", state["tools"])
+            self.assertTrue(state["final_decision_only"])
+            evidence = [
+                item for entry in state["observations"] for item in entry["results"]
+            ]
+            return ModelTurn(
+                decision="Propose cancellation",
+                proposal=CancelProposal(
+                    kind="cancel_order",
+                    order_id="order-1001",
+                    evidence_ids=tuple(item["evidence_id"] for item in evidence),
+                ),
+            )
+
+        self.model.script = [tool("policy_search", query="cancellation"), proposal]
+        result = self.send("Yes, cancel please")
+        self.assertEqual(result["disposition"], "awaiting_confirmation")
+        self.assertEqual(len(self.model.calls) - before, 2)
+        self.assertEqual(
+            [
+                s["details"]["name"]
+                for s in result["steps"]
+                if s["stage"] == "tool_request"
+            ],
+            ["order_detail", "policy_search"],
+        )
+        self.assertFalse(
+            any(s["stage"] == "duplicate_tool_check" for s in result["steps"])
+        )
+
     def test_followup_cancellation_reuses_target_and_completes_policy_evidence(self):
         self.runtime.judge = FakeJudge()
         self.model.script = [
             tool("order_detail", order_id="order-1001"),
             test_workflow.answer("Your Canon EOS R50 order is paid and unfulfilled."),
         ]
-        self.send("Can I cancel my unshipped camera order?")
+        initial = self.send("Can I cancel my unshipped camera order?")
+        task_id = initial["task"]["task_id"]
+        self.repo = SupportRepository(self.repo.session_factory)
+        self.client.close()
+        self.app = FastAPI()
+        self.app.include_router(test_workflow.api.router)
+        self.app.dependency_overrides[test_workflow.api.repository] = lambda: self.repo
+        self.app.dependency_overrides[test_workflow.api.runtime] = lambda: self.runtime
+        self.client = TestClient(self.app)
+        for _ in range(5):
+            self.send("What are my orders?")
         self.runtime.judge = FakeJudge(intent=Intent.ACTION)
 
         def proposal(state):
@@ -86,12 +138,67 @@ class ActionTests(test_workflow.ApiTests):
         self.assertEqual(response["disposition"], "awaiting_confirmation")
         self.assertIsNotNone(response["pending_action"])
         self.assertIsNone(response["receipt"])
+        self.assertEqual(response["task"]["task_id"], task_id)
+        self.assertEqual(response["task"]["status"], "awaiting_approval")
+        self.assertEqual(response["task"]["version"], 3)
+        self.assertTrue(any(s["stage"] == "task_resumed" for s in response["steps"]))
         requests = [
             s["details"]["name"]
             for s in response["steps"]
             if s["stage"] == "tool_request"
         ]
         self.assertEqual(requests, ["order_detail", "policy_search"])
+        calls = len(self.model.calls)
+        repeat = self.send("Yes, cancel please")
+        self.assertEqual(repeat["stop_reason"], "explicit_confirmation_required")
+        self.assertEqual(repeat["task"]["status"], "awaiting_approval")
+        self.assertEqual(len(self.model.calls), calls)
+        with Session(self.engine) as db:
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(SupportProposal)), 1
+            )
+        decided = self.decide(response).json()
+        self.assertEqual(decided["task"]["task_id"], task_id)
+        self.assertEqual(decided["task"]["status"], "completed")
+
+    def test_clarification_checkpoint_resumes_without_original_transcript(self):
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+        self.model.script = [
+            ModelTurn(
+                decision="Need target",
+                clarification="Which order would you like to cancel?",
+            )
+        ]
+        initial = self.send("Cancel an order")
+        self.assertEqual(initial["task"]["status"], "awaiting_clarification")
+        self.repo = SupportRepository(self.repo.session_factory)
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        result = self.send("order-1001")
+        self.assertEqual(result["task"]["task_id"], initial["task"]["task_id"])
+        self.assertEqual(
+            self.model.calls[-1]["task_checkpoint"]["pending_question"],
+            "Which order would you like to cancel?",
+        )
+
+    def test_checkpoint_is_scoped_to_conversation_and_unrelated_messages(self):
+        initial = self.propose()
+        calls = len(self.model.calls)
+        unrelated = self.send("What are my orders?")
+        self.assertIsNone(unrelated["task"])
+        self.assertEqual(len(self.model.calls), calls)
+        with Session(self.engine) as db:
+            checkpoint = require_row(db, SupportTask, UUID(initial["task"]["task_id"]))
+            self.assertEqual(
+                checkpoint.checkpoint["version"], initial["task"]["version"]
+            )
+        other = self.repo.create_conversation(UUID(self.token))
+        run, _, _ = self.repo.begin(UUID(self.token), other)
+        checkpoint, resumed = self.repo.task_for_message(
+            UUID(self.token), other, run, "Yes"
+        )
+        self.assertIsNone(checkpoint)
+        self.assertFalse(resumed)
+        self.repo.abort(UUID(self.token), other, run)
 
     # Reuse the isolated API setup while retaining its read-only regressions.
     def send(self, message):
@@ -505,6 +612,7 @@ class ActionTests(test_workflow.ApiTests):
             SupportProposal,
             SupportCase,
             SupportReceipt,
+            SupportTask,
         )
         with TemporaryDirectory() as directory:
             engine = create_engine(

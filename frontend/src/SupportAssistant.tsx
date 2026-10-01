@@ -7,6 +7,7 @@ import { supportChats, supportDecide, supportHistory, supportMessage, supportNew
 import type { SupportConversation, SupportResult, SupportStep, SupportTurn } from './supportTypes'
 
 const LABELS: Record<string, string> = {
+  task_created: 'Starting a support task', task_resumed: 'Resuming the saved support task', task_checkpoint: 'Saving task progress',
   request_check: 'Checking the request', intent_input: 'Classifying the request', intent_check: 'Checking intent confidence',
   model_input: 'Choosing the next support step', model_output: 'Support decision received', tool_check: 'Validating tool arguments', tool_result: 'Reading scoped results',
   eligibility_check: 'Checking order eligibility', proposal_check: 'Validating the proposed change', proposal_state_check: 'Checking current order and policy',

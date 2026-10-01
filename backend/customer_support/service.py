@@ -29,6 +29,7 @@ from .contracts import (
     SupportRequest,
     SupportResponse,
     SupportStep,
+    TaskCheckpoint,
 )
 from .providers import Judge, ModelBoundaryFailure, SupportModel
 from .retrieval import IndexUnavailable, PolicyIndex, search
@@ -118,6 +119,8 @@ async def run_support(
     operations_enabled: bool = False,
     case_lookup=None,
     pending_ids: list[str] | None = None,
+    task_checkpoint: TaskCheckpoint | None = None,
+    task_resumed: bool = False,
 ) -> SupportResponse:
     steps, catalog, usage = [], {}, {}
     tool_count = 0
@@ -186,6 +189,9 @@ async def run_support(
 
     try:
         state = precheck(request, history or [])
+        if task_checkpoint:
+            state["task_checkpoint"] = task_checkpoint.model_dump(mode="json")
+            state["checkpoint_is_current_evidence"] = False
         recent_text = json.dumps(state["recent_turns"])
         state["references"] = {
             "owned_order_ids": [
@@ -197,6 +203,12 @@ async def run_support(
                 if p.product_id in recent_text
             ],
         }
+        if task_checkpoint and task_checkpoint.selected_order_ids:
+            state["references"]["owned_order_ids"] = [
+                key
+                for key in task_checkpoint.selected_order_ids
+                if customer.order(key).order is not None
+            ]
         step(
             "request_check",
             **state,
@@ -204,6 +216,23 @@ async def run_support(
             prompt_version="support-v1",
             fixture_version=store.fixture.version,
         )
+        if task_checkpoint:
+            step(
+                "task_resumed" if task_resumed else "task_created",
+                checkpoint=task_checkpoint.model_dump(mode="json"),
+                current_state_refresh_required=True,
+            )
+            if task_checkpoint.status == "awaiting_approval":
+                step(
+                    "confirmation_route_check",
+                    pending_proposal_ids=pending_ids or [],
+                    task_id=task_checkpoint.task_id,
+                )
+                return finish(
+                    "clarification",
+                    "Please confirm or reject the existing cancellation using its confirmation card.",
+                    "explicit_confirmation_required",
+                )
         if re.fullmatch(
             r"(?:what are my orders|(?:show|list)(?: me)? my orders|my orders)[?.!]*",
             state["message"].lower(),
@@ -347,6 +376,52 @@ async def run_support(
         state["operation_proposals_enabled"] = operations_enabled
         state["intent"] = judgment.intent.value
         state["observations"] = []
+        if (
+            task_resumed
+            and task_checkpoint
+            and len(state["references"]["owned_order_ids"]) == 1
+        ):
+            order_id = state["references"]["owned_order_ids"][0]
+            current = customer.order(order_id).order
+            if current is not None:
+                step(
+                    "tool_request",
+                    name="order_detail",
+                    arguments={"order_id": order_id},
+                    application_owned=True,
+                )
+                facts = order_facts(current)
+                observation = add(
+                    "order", order_id, "current_owned_order_snapshot", json.dumps(facts)
+                )
+                step(
+                    "eligibility_check",
+                    order_id=order_id,
+                    rules=facts["policy_rule_inputs"],
+                    result=facts["read_only_review"],
+                    execution_authorized=False,
+                )
+                step("tool_result", name="order_detail", observations=[observation])
+                state["observations"].append(
+                    {
+                        "tool": {
+                            "name": "order_detail",
+                            "arguments": {"order_id": order_id},
+                        },
+                        "results": [observation],
+                    }
+                )
+                tool_count += 1
+                state["tools"].pop("order_detail", None)
+                state["required_evidence"] = (
+                    "Current selected order has already been refreshed. Retrieve applicable policy next if needed; reuse this order evidence."
+                )
+                step(
+                    "completed_read_check",
+                    source="selected_task_order",
+                    removed_tools=["order_detail"],
+                    reason="current_snapshot_already_available",
+                )
         for turn in range(MAX_TURNS):
             tokens = sum(
                 int(v.get("input_tokens", 0)) + int(v.get("output_tokens", 0))
@@ -614,6 +689,13 @@ async def run_support(
                 state["tools"] = {}
                 step("source_selection_closed", reason="repeated_tool_call")
                 continue
+            if call.name not in state["tools"]:
+                step("tool_availability_check", name=call.name, passed=False)
+                return finish(
+                    "clarification",
+                    "I couldn’t complete that lookup. Please clarify what you would like to check.",
+                    "unavailable_tool",
+                )
             step("tool_request", name=call.name, arguments=call.arguments)
             try:
                 observations = []

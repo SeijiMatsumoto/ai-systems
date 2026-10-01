@@ -6,8 +6,9 @@ Run from the repository root with --live. Never included in unittest discovery.
 import argparse
 import json
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -30,6 +31,7 @@ from backend.db.schemas import (
     SupportOutput,
     SupportProposal,
     SupportReceipt,
+    SupportTask,
 )
 from backend.internal_knowledge_action.embedding import MockEmbeddingProvider
 
@@ -68,6 +70,14 @@ QUERIES = (
 )
 
 
+def smoke_app(repo, deps):
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[api.repository] = lambda: repo
+    app.dependency_overrides[api.runtime] = lambda: deps
+    return app
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -76,6 +86,11 @@ def main():
     parser.add_argument("--limit", type=int, default=9, choices=range(1, 10))
     parser.add_argument("--only", nargs="+", choices=[q[0] for q in QUERIES])
     parser.add_argument("--output", type=Path, default=Path("/tmp/support-smoke.json"))
+    parser.add_argument(
+        "--restart-before-followup",
+        action="store_true",
+        help="Recreate API, repository and providers before continuation",
+    )
     args = parser.parse_args()
     if not args.live:
         parser.error("--live is required; this command calls paid providers")
@@ -108,6 +123,7 @@ def main():
                 SupportProposal,
                 SupportReceipt,
                 SupportCase,
+                SupportTask,
             )
         ],
     )
@@ -139,7 +155,8 @@ def main():
     app.dependency_overrides[api.runtime] = lambda: deps
     results = []
     base = "/agent/customer_support"
-    with TestClient(app) as client:
+    with ExitStack() as stack:
+        client = stack.enter_context(TestClient(app))
         login = client.post(base + "/sessions", json={"customer_id": "customer-alex"})
         login.raise_for_status()
         headers = {"Authorization": "Bearer " + login.json()["token"]}
@@ -148,6 +165,17 @@ def main():
         for name, query, expected in selected:
             if name in prerequisites:
                 chat = chats[prerequisites[name]]
+                if args.restart_before_followup:
+                    repo = SupportRepository(sessions)
+                    deps = api.Runtime(
+                        MockStore.load(),
+                        LiveSupportModel(),
+                        LiveJevJudge(),
+                        index,
+                        MockEmbeddingProvider(),
+                    )
+                    app = smoke_app(repo, deps)
+                    client = stack.enter_context(TestClient(app))
             else:
                 created = client.post(base + "/conversations", headers=headers)
                 created.raise_for_status()
@@ -165,7 +193,9 @@ def main():
                 if line.startswith("data: ")
             ]
             completed = next((e for e in events if e["type"] == "completed"), None)
-            result = completed["result"] if completed else {"error": response.text}
+            result: dict[str, Any] = (
+                completed["result"] if completed else {"error": response.text}
+            )
             passed = (
                 result.get("disposition") in expected
                 and result.get("stop_reason") != "provider_or_validation_failure"
@@ -183,6 +213,18 @@ def main():
                     passed
                     and (result.get("review_case") or {}).get("order_id")
                     == "order-1004"
+                )
+            if name == "cancel_followup":
+                initial = next(
+                    r["result"] for r in results if r["name"] == "eligibility"
+                )
+                passed = (
+                    passed
+                    and (result.get("task") or {}).get("task_id")
+                    == (initial.get("task") or {}).get("task_id")
+                    and any(
+                        s["stage"] == "task_resumed" for s in result.get("steps", [])
+                    )
                 )
             record = {
                 "name": name,

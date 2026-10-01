@@ -22,6 +22,7 @@ from backend.observability import EXPORT_ENABLED
 
 from .contracts import (
     ConfirmationRequest,
+    ConversationTurn,
     DemoSignIn,
     MessageRequest,
     PolicyIndex,
@@ -160,6 +161,7 @@ async def execute(
     on_step=None,
 ):
     saved_steps = []
+    checkpoint = None
 
     def capture(step):
         saved_steps.append(step)
@@ -175,6 +177,21 @@ async def execute(
         )
         try:
             repo.attach_trace(token, conversation_id, run_id, trace_id)
+            checkpoint, resumed = repo.task_for_message(
+                token, conversation_id, run_id, request.message
+            )
+            if checkpoint:
+                context = [
+                    *context,
+                    ConversationTurn(
+                        question=checkpoint.goal,
+                        answer=checkpoint.last_answer,
+                        order_ids=checkpoint.selected_order_ids,
+                        proposal_ids=(checkpoint.pending_proposal_id,)
+                        if checkpoint.pending_proposal_id
+                        else (),
+                    ),
+                ]
             result = await run_support(
                 SupportRequest(
                     conversation_id=str(conversation_id), message=request.message
@@ -191,7 +208,10 @@ async def execute(
                 operations_enabled=True,
                 case_lookup=lambda key: repo.case(token, conversation_id, key),
                 pending_ids=repo.pending(token, conversation_id),
+                task_checkpoint=checkpoint,
+                task_resumed=resumed,
             )
+            result = result.model_copy(update={"task": checkpoint})
         except BaseException:
             interrupted = SupportStep(
                 sequence=len(saved_steps) + 1,
@@ -206,6 +226,7 @@ async def execute(
                 stop_reason="interrupted",
                 steps=(*saved_steps, interrupted),
                 fixture_version=deps.store.fixture.version,
+                task=checkpoint,
             )
             repo.finish(token, conversation_id, request.message, result)
             raise

@@ -13,7 +13,7 @@ from backend.db import schemas
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
-    engine = create_engine(DATABASE_URL, future=True)
+    engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 else:
     engine = None

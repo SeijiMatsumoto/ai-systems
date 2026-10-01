@@ -2697,3 +2697,33 @@ pre,
   .incident-claim { grid-template-columns: 64px minmax(0, 1fr); gap: 11px; }
 
 }
+
+/* Support reuses the shared knowledge chat visual language. */
+.support-turn { display: flex; flex-direction: column; gap: 22px; }
+.support-case-id { overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.support-trace-link { margin-top: 12px; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.support-workflow-list { padding-left: 22px; display: grid; gap: 14px; }
+.support-workflow-list summary { cursor: pointer; font-size: 13px; }
+.support-workflow-list pre, .support-json { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.6; padding: 12px; border-radius: 8px; background: var(--accent-soft); }
+.support-assistant .knowledge-action-buttons { flex-wrap: wrap; }
+.support-assistant .knowledge-action-proposal h4 { overflow-wrap: anywhere; }
+.support-assistant .knowledge-chat-composer:focus-within { border-color: var(--accent); }
+.support-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: 20px; align-items: start; }
+.support-workspace .knowledge-chat { min-width: 0; }
+.support-workspace .knowledge-chat-header { flex-wrap: wrap; }
+.support-admin.knowledge-run-details { margin-top: 0; position: sticky; top: 95px; min-width: 0; }
+.support-admin-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.support-admin-run { display: grid; gap: 7px; font-size: 11px; color: var(--muted); }
+.support-admin-run select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 7px; background: white; color: var(--ink); }
+@media (max-width: 1050px) { .support-workspace { grid-template-columns: 1fr; } .support-admin.knowledge-run-details { position: static; } }
+.support-workspace .knowledge-chat { margin-top: 0; }
+.support-assistant .knowledge-action-proposal > .knowledge-new-chat-button { margin-top: 12px; }
+
+.markdown-table-scroll { width: 100%; max-width: 100%; overflow-x: auto; margin: 16px 0 20px; border: 1px solid var(--line-strong); border-radius: 10px; background: white; }
+.markdown-answer-table { width: 100%; min-width: 460px; border-collapse: collapse; text-align: left; font-size: 12px; line-height: 1.5; }
+.markdown-answer-table th { padding: 11px 13px; background: var(--accent-soft); color: var(--accent-dark); font-size: 10px; font-weight: 700; letter-spacing: .025em; }
+.markdown-answer-table td { padding: 13px; border-top: 1px solid var(--line); vertical-align: top; }
+.markdown-answer-table td:first-child { white-space: nowrap; }
+.markdown-answer-table th:nth-last-child(-n+2), .markdown-answer-table td:nth-last-child(-n+2) { min-width: 80px; }
+.markdown-answer-table tr:last-child td { border-bottom: 0; }
+.support-workspace { margin-top: 28px; }

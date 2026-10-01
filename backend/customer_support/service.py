@@ -7,6 +7,7 @@ from collections.abc import Callable
 from decimal import Decimal
 
 from pydantic import ValidationError
+from pydantic_core import to_jsonable_python
 
 from backend.internal_knowledge_action.embedding import EmbeddingProvider
 
@@ -29,7 +30,7 @@ from .contracts import (
     SupportResponse,
     SupportStep,
 )
-from .providers import Judge, SupportModel
+from .providers import Judge, ModelBoundaryFailure, SupportModel
 from .retrieval import IndexUnavailable, PolicyIndex, search
 from .store import CustomerStore, MockStore, review_order
 
@@ -70,7 +71,7 @@ def precheck(request: SupportRequest, history: list[ConversationTurn]) -> dict:
             if re.search(pattern, message, re.IGNORECASE)
         ],
         "recent_turns": [turn.model_dump(mode="json") for turn in recent],
-        "context_is_evidence": False,
+        "prior_turns_are_evidence": False,
     }
 
 
@@ -134,30 +135,13 @@ async def run_support(
         item = SupportStep(
             sequence=len(steps) + 1,
             stage=stage,
-            details=json.loads(json.dumps(details)),
+            details=to_jsonable_python(details),
         )
         steps.append(item)
         if on_step:
             on_step(item)
 
     def finish(disposition, answer, reason, evidence_ids=(), operation=None):
-        if (
-            operations_enabled
-            and disposition == "handoff_needed"
-            and operation is None
-            and re.search(r"[a-zA-Z0-9]", request.message)
-        ):
-            operation = CaseRequest(
-                kind="create_case",
-                category=CaseCategory.GENERAL,
-                customer_statement=request.message[:1000],
-            )
-            step(
-                "escalation_case_check",
-                reason=reason,
-                scope="owned conversation",
-                customer_statement_is_verified=False,
-            )
         step(
             "stop",
             disposition=disposition,
@@ -186,6 +170,20 @@ async def run_support(
         catalog[key] = item
         return item.model_dump(mode="json")
 
+    def order_facts(order):
+        facts = order.model_dump(mode="json", exclude={"address", "customer_id"})
+        for line in facts["lines"]:
+            product = store.product(line["product_id"])
+            if product is None:
+                raise ValueError("Unknown fixture product")
+            line["product_name"] = product.name
+            line["product_kind"] = product.kind
+            line["unit_price_usd"] = str(Decimal(line["unit_price_cents"]) / 100)
+        facts["read_only_review"] = review_order(order, store).model_dump(mode="json")
+        facts["scenario_date"] = str(store.fixture.scenario_date)
+        facts["policy_rule_inputs"] = store.fixture.rules.model_dump(mode="json")
+        return facts
+
     try:
         state = precheck(request, history or [])
         recent_text = json.dumps(state["recent_turns"])
@@ -206,6 +204,57 @@ async def run_support(
             prompt_version="support-v1",
             fixture_version=store.fixture.version,
         )
+        if re.fullmatch(
+            r"(?:what are my orders|(?:show|list)(?: me)? my orders|my orders)[?.!]*",
+            state["message"].lower(),
+        ):
+            step("deterministic_route", route="owned_order_list", model_required=False)
+            step("tool_request", name="order_list", arguments={})
+            orders = customer.orders()
+            evidence_ids = []
+            lines = [
+                "| Ordered | Items | Payment | Delivery |",
+                "| :--- | :--- | :--- | :--- |",
+            ]
+            for order in orders:
+                facts = order.model_dump(
+                    mode="json", exclude={"address", "customer_id"}
+                )
+                record = add(
+                    "order",
+                    order.order_id,
+                    "current_owned_order_snapshot",
+                    json.dumps(facts),
+                )
+                evidence_ids.append(record["evidence_id"])
+                products = ", ".join(
+                    f"{line.quantity} × {next((p.name for p in store.fixture.products if p.product_id == line.product_id), line.product_id)}"
+                    for line in order.lines
+                )
+                lines.append(
+                    f"| {order.placed_on} | {products.replace(chr(124), chr(92) + chr(124))} | {order.state.value.capitalize()} | {order.fulfillment.value.replace('_', ' ').capitalize()} |"
+                )
+            step(
+                "tool_result",
+                name="order_list",
+                observations=[
+                    catalog[key].model_dump(mode="json") for key in evidence_ids
+                ],
+            )
+            step(
+                "deterministic_answer_check",
+                source="owned current order records",
+                count=len(orders),
+                passed=True,
+            )
+            return finish(
+                "answered",
+                "Here are your orders:\n\n" + "\n".join(lines)
+                if orders
+                else "You don’t have any orders yet.",
+                "owned_order_list",
+                evidence_ids,
+            )
         # A bounded, validated snapshot is supplied before every Jev/model call.
         if len(json.dumps(state)) > MAX_CONTEXT_CHARS:
             return finish(
@@ -235,16 +284,28 @@ async def run_support(
             threshold=THRESHOLD,
         )
         if judgment.probability < THRESHOLD:
-            return finish(
-                "clarification",
-                "Could you clarify what you need help with?",
-                "intent_uncertain",
+            if judgment.intent not in (Intent.INFORMATION, Intent.ACTION):
+                return finish(
+                    "clarification",
+                    "Could you clarify what you need help with?",
+                    "intent_uncertain",
+                )
+            # Uncertainty about explanation versus execution must not block
+            # authorized reads. It must not authorize a proposal or a write.
+            operations_enabled = False
+            step(
+                "intent_route_check",
+                route="read_only",
+                reason="uncertain_information_or_action",
+                classified_intent=judgment.intent.value,
+                operation_proposals_enabled=False,
             )
+            judgment = judgment.model_copy(update={"intent": Intent.INFORMATION})
         state["pending_proposal_ids"] = pending_ids or []
         state["case_ids"] = list(
             dict.fromkeys(key for turn in (history or []) for key in turn.case_ids)
         )
-        if operations_enabled and judgment.intent in {Intent.HUMAN, Intent.UNSUPPORTED}:
+        if operations_enabled and judgment.intent == Intent.HUMAN:
             operation = CaseRequest(
                 kind="create_case",
                 category=CaseCategory.GENERAL,
@@ -258,6 +319,12 @@ async def run_support(
                 "Saving your request for human review.",
                 "case_request_validated",
                 operation=operation,
+            )
+        if judgment.intent == Intent.UNSUPPORTED:
+            return finish(
+                "clarification",
+                "I can help with camera equipment, orders, and store policies. What would you like to know?",
+                "unsupported_request",
             )
         if not operations_enabled and judgment.intent != Intent.INFORMATION:
             return finish(
@@ -303,6 +370,12 @@ async def run_support(
             output, counts = await bounded(model.turn(state, run_id), 40)
             usage[f"model_{turn + 1}"] = counts
             step("model_output", output=output.model_dump(mode="json"), usage=counts)
+            if state.get("final_decision_only") and output.tool is not None:
+                return finish(
+                    "clarification",
+                    "What specific detail would you like help with?",
+                    "invalid_final_decision",
+                )
             if output.proposal is not None:
                 operation = output.proposal
                 problem = None
@@ -511,6 +584,20 @@ async def run_support(
             call = output.tool
             if call is None:
                 raise ValueError("Model turn has no tool")
+            if any(
+                previous["tool"] == call.model_dump(mode="json")
+                for previous in state["observations"]
+            ):
+                step(
+                    "duplicate_tool_check",
+                    name=call.name,
+                    arguments=call.arguments,
+                    passed=False,
+                )
+                state["final_decision_only"] = True
+                state["tools"] = {}
+                step("source_selection_closed", reason="repeated_tool_call")
+                continue
             step("tool_request", name=call.name, arguments=call.arguments)
             try:
                 observations = []
@@ -541,37 +628,21 @@ async def run_support(
                     step("policy_retrieval", **ranks)
                 elif call.name == "order_list":
                     EmptyArgs.model_validate(call.arguments)
-                    # Listing disambiguates IDs; it cannot support current order-state claims.
-                    listing = [
-                        {
-                            "order_id": o.order_id,
-                            "product_ids": [line.product_id for line in o.lines],
-                        }
-                        for o in customer.orders()
-                    ]
-                    observations.append(
-                        {
-                            "owned_orders": listing,
-                            "instruction": "Use order_detail before describing order state",
-                        }
+                    observations.extend(
+                        add(
+                            "order",
+                            order.order_id,
+                            "current_owned_order_snapshot",
+                            json.dumps(order_facts(order)),
+                        )
+                        for order in customer.orders()
                     )
                 elif call.name == "order_detail":
                     args = OrderArgs.model_validate(call.arguments)
                     result = customer.order(args.order_id)
                     if result.order:
-                        facts = result.order.model_dump(
-                            mode="json", exclude={"address", "customer_id"}
-                        )
-                        for line in facts["lines"]:
-                            line["unit_price_usd"] = str(
-                                Decimal(line["unit_price_cents"]) / 100
-                            )
-                        facts["scenario_date"] = str(store.fixture.scenario_date)
+                        facts = order_facts(result.order)
                         review = review_order(result.order, store)
-                        facts["read_only_review"] = review.model_dump(mode="json")
-                        facts["policy_rule_inputs"] = store.fixture.rules.model_dump(
-                            mode="json"
-                        )
                         step(
                             "eligibility_check",
                             order_id=args.order_id,
@@ -648,6 +719,45 @@ async def run_support(
                 state["observations"].append(
                     {"tool": call.model_dump(mode="json"), "results": observations}
                 )
+                # A repeated result adds no evidence, even if the query was reworded.
+                previous_sources = {
+                    (
+                        item.get("kind"),
+                        item.get("source_id"),
+                        item.get("locator"),
+                        item.get("text"),
+                    )
+                    for entry in state["observations"][:-1]
+                    for item in entry["results"]
+                    if "evidence_id" in item
+                }
+                new_sources = {
+                    (
+                        item.get("kind"),
+                        item.get("source_id"),
+                        item.get("locator"),
+                        item.get("text"),
+                    )
+                    for item in observations
+                    if "evidence_id" in item
+                }
+                if (
+                    (new_sources and new_sources <= previous_sources)
+                    or call.name in {"compatibility", "case_detail"}
+                    or tool_count >= MAX_TOOL_CALLS
+                    or (
+                        call.name == "order_detail"
+                        and any(item.kind == "policy" for item in catalog.values())
+                    )
+                ):
+                    state["final_decision_only"] = True
+                    state["tools"] = {}
+                    step(
+                        "source_selection_closed",
+                        reason="no_new_evidence"
+                        if new_sources <= previous_sources
+                        else "bounded_context_ready",
+                    )
             except IndexUnavailable as exc:
                 step("tool_failure", name=call.name, reason=str(exc))
                 return finish(
@@ -668,9 +778,21 @@ async def run_support(
             "turn_budget",
         )
     except Exception as exc:  # noqa: BLE001 - save a terminal provider failure
-        step("failure", error_type=type(exc).__name__)
+        if isinstance(exc, ModelBoundaryFailure):
+            usage["failed_model"] = exc.usage
+            step(
+                "failure",
+                error_type=exc.error_type,
+                error_message=str(exc),
+                validation_diagnostics=exc.diagnostics,
+                usage=exc.usage,
+            )
+        else:
+            step(
+                "failure", error_type=type(exc).__name__, error_message=str(exc)[:1500]
+            )
         return finish(
             "handoff_needed",
-            "Support could not complete this check. Human review is needed.",
+            "I couldn’t complete that answer. Please try again or ask to contact our support team.",
             "provider_or_validation_failure",
         )

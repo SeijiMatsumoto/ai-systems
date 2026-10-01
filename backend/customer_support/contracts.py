@@ -355,6 +355,7 @@ class PendingAction(Record):
 
 
 class ReviewCase(Record):
+    ticket_number: int | None = Field(default=None, ge=1)
     case_id: Identifier
     category: CaseCategory
     order_id: Identifier | None
@@ -396,6 +397,71 @@ class ModelTurn(Record):
                 "Choose exactly one tool, answer, clarification, or proposal"
             )
         return self
+
+
+class ToolDecision(Record):
+    kind: Literal["tool"]
+    decision: Annotated[str, Field(min_length=1, max_length=500)]
+    tool: ToolCall
+
+
+class AnswerDecision(Record):
+    kind: Literal["answer"]
+    decision: Annotated[str, Field(min_length=1, max_length=500)]
+    answer: AnswerDraft
+
+
+class ClarificationDecision(Record):
+    kind: Literal["clarification"]
+    decision: Annotated[str, Field(min_length=1, max_length=500)]
+    clarification: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=500,
+            description="One concise question only, ending with ?, without an explanation or factual assertions.",
+        ),
+    ]
+
+    @model_validator(mode="after")
+    def question_only(self):
+        if (
+            not self.clarification.endswith("?")
+            or self.clarification.count("?") != 1
+            or "\n" in self.clarification
+        ):
+            raise ValueError(
+                "Clarification must be one question ending in ?, without appended explanations"
+            )
+        return self
+
+
+class ProposalDecision(Record):
+    kind: Literal["proposal"]
+    decision: Annotated[str, Field(min_length=1, max_length=500)]
+    proposal: OperationProposal
+
+
+class DecisionEnvelope(Record):
+    action: Annotated[
+        ToolDecision | AnswerDecision | ClarificationDecision | ProposalDecision,
+        Field(discriminator="kind"),
+    ]
+
+    def as_turn(self) -> ModelTurn:
+        return ModelTurn.model_validate(self.action.model_dump(exclude={"kind"}))
+
+
+class FinalDecisionEnvelope(Record):
+    """A terminal decision after the harness closes source selection."""
+
+    action: Annotated[
+        AnswerDecision | ClarificationDecision | ProposalDecision,
+        Field(discriminator="kind"),
+    ]
+
+    def as_turn(self) -> ModelTurn:
+        return ModelTurn.model_validate(self.action.model_dump(exclude={"kind"}))
 
 
 class ConversationTurn(Record):

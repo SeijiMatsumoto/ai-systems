@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Annotated, Never
 from uuid import UUID
@@ -81,9 +82,16 @@ def error(exc) -> Never:
     if isinstance(exc, ConversationBusy):
         raise HTTPException(409, str(exc)) from exc
     if isinstance(exc, SQLAlchemyError):
+        original = getattr(exc, "orig", None)
+        code = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+        logging.getLogger(__name__).warning(
+            "Support persistence failure: %s; SQLSTATE=%s", type(exc).__name__, code
+        )
         raise HTTPException(
             503,
-            "Support persistence unavailable; check database setup and migrations 009 and 010",
+            "Support setup is incomplete. Please contact the demo administrator."
+            if code == "42P01"
+            else "Support is temporarily unavailable. Please retry.",
         ) from exc
     raise HTTPException(400, str(exc)) from exc
 

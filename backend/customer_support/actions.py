@@ -139,7 +139,18 @@ def save_case(
             for row in reversed(rows)
         ]
     key_id = uuid4()
+    from sqlalchemy import func
+
+    ticket_number = (
+        db.scalar(
+            select(func.count())
+            .select_from(SupportCase)
+            .where(SupportCase.conversation_id == conversation_id)
+        )
+        or 0
+    ) + 1
     case = ReviewCase(
+        ticket_number=ticket_number,
         case_id="case-" + key_id.hex,
         category=operation.category,
         order_id=operation.order_id,
@@ -187,7 +198,12 @@ def save_operation(
                 "approved_operation": None,
                 "review_case": case,
                 "disposition": "case_created",
-                "answer": f"Your case **{case.case_id}** is saved and pending human review. A human must decide the request; no refund, return approval, or replacement has been issued.",
+                "answer": (
+                    "I couldn’t complete the lookup because a technical check failed. "
+                    "A support case has been saved for human follow-up; this is not an answer to your question."
+                    if response.stop_reason == "provider_or_validation_failure"
+                    else f"Ticket #{case.ticket_number} has been sent to our support team. We’ll review your request and follow up."
+                ),
                 "stop_reason": response.stop_reason
                 if response.stop_reason == "provider_or_validation_failure"
                 else "case_saved",
@@ -223,7 +239,7 @@ def save_operation(
                 "approved_operation": None,
                 "review_case": case,
                 "disposition": "case_created",
-                "answer": f"This order cannot be changed automatically in its current state. Case **{case.case_id}** is saved for human review. No order change or refund was performed.",
+                "answer": f"This order cannot be changed automatically in its current state. Ticket #{case.ticket_number} is saved for human review. No order change or refund was performed.",
                 "stop_reason": "ineligible_action_case_saved",
             }
         )
@@ -440,7 +456,7 @@ def confirm(
             "blocked": "The proposal was blocked because its state or policy changed. No order change was made.",
         }[outcome]
         if case:
-            description += f" Case **{case.case_id}** is pending human review."
+            description += f" Ticket #{case.ticket_number} is pending human review."
         disposition: Literal[
             "action_completed", "action_rejected", "action_blocked"
         ] = (

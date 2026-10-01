@@ -1,3 +1,5 @@
+import { ArchitectureFlow } from './components/ArchitectureFlow'
+
 const stages = [
   {
     label: '01 · Ingest and index',
@@ -28,20 +30,11 @@ const stages = [
   },
 ]
 
-function FlowRow({ nodes }: { nodes: string[][] }) {
-  return <div className="knowledge-architecture-flow">
-    {nodes.map(([title, detail], index) => <div className="knowledge-architecture-flow-item" key={title}>
-      {index > 0 && <span className="knowledge-architecture-arrow" aria-hidden="true">→</span>}
-      <div className="knowledge-architecture-node"><strong>{title}</strong><small>{detail}</small></div>
-    </div>)}
-  </div>
-}
-
 export default function KnowledgeSystemDiagram() {
   return <div className="knowledge-architecture" role="region" aria-label="Internal Knowledge and Action architecture">
     {stages.map((stage) => <section className="knowledge-architecture-stage" key={stage.label}>
       <h3>{stage.label}</h3>
-      <FlowRow nodes={stage.nodes} />
+      <ArchitectureFlow nodes={stage.nodes} />
     </section>)}
 
     <section className="knowledge-architecture-stage">

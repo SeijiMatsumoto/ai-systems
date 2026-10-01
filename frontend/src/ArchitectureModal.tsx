@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react'
 const IncidentSystemDiagram = lazy(() => import('./IncidentSystemDiagram'))
 const ResearchSystemDiagram = lazy(() => import('./ResearchSystemDiagram'))
 const KnowledgeSystemDiagram = lazy(() => import('./KnowledgeSystemDiagram'))
+const SupportSystemDiagram = lazy(() => import('./SupportSystemDiagram'))
 const PlannedSystemDiagram = lazy(() => import('./PlannedSystemDiagram'))
 
 export default function ArchitectureModal({ systemId, title, availability, onClose }: {
@@ -38,7 +39,7 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
       <div className="architecture-modal-frame">
         <header className="architecture-modal-header">
           <div>
-            <span className="section-kicker">{systemId === 'knowledge-action' ? 'System architecture' : `System architecture · ${availability === 'ready' ? 'Runnable demo' : 'Proposed design'}`}</span>
+            <span className="section-kicker">{['knowledge-action', 'customer-support'].includes(systemId) ? 'System architecture' : `System architecture · ${availability === 'ready' ? 'Runnable demo' : 'Proposed design'}`}</span>
             <h2 id="architecture-modal-title">{title}</h2>
           </div>
           <button className="architecture-modal-close" type="button" onClick={() => dialogRef.current?.close()} autoFocus aria-label="Close architecture diagram">×</button>
@@ -47,7 +48,7 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
           {systemId === 'knowledge-action' && <p className="architecture-modal-note">The runnable demo includes indexed knowledge retrieval, cited answers, Jev grounding checks, and an approval-gated mock support task. Persona and approver selection are simulated; task records stay local.</p>}
           {availability === 'planned' && systemId !== 'knowledge-action' && <p className="architecture-modal-note">This diagram shows the intended boundaries. The workflow is an architecture scaffold and is not runnable yet.</p>}
           <Suspense fallback={<p className="architecture-modal-note">Loading diagram…</p>}>
-            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}
+            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : systemId === 'customer-support' ? <SupportSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}
           </Suspense>
         </div>
       </div>

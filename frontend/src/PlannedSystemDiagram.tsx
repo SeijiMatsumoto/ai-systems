@@ -14,19 +14,7 @@ const designs: Record<string, { summary: string; main: Step[]; branch: Step; bra
     branchLabel: 'tool call', returnLabel: 'file + test result',
     note: 'The runtime owns file permissions and command limits; the model proposes edits but cannot expand its own scope.',
   },
-  'customer-support': {
-    summary: 'A proposed support agent reads policy and authoritative account state, checks ownership and eligibility, then answers, acts, or escalates.',
-    main: [
-      { category: 'REQUEST', title: 'Customer message', detail: 'Authenticated conversation' },
-      { category: 'SOURCE LOOKUP', title: 'Policy + account', detail: 'Rules and current state' },
-      { category: 'MODEL · AGENT', title: 'Answer or propose', detail: 'Cite policy; suggest action', tone: 'model' },
-      { category: 'ACTION GATE', title: 'Ownership + policy', detail: 'Check eligibility in code', tone: 'gate' },
-      { category: 'OUTPUT', title: 'Answer / handoff', detail: 'Confirmed state or escalation', tone: 'output' },
-    ],
-    branch: { category: 'AUTHORITATIVE TOOLS', title: 'Mock account APIs', detail: 'Order state and checked actions' },
-    branchLabel: 'lookup / action', returnLabel: 'confirmed state',
-    note: 'Policy text and account records have different authority. Blocked or uncertain actions go to a human.',
-  },
+
 }
 
 function Box({ x, y, step }: { x: number; y: number; step: Step }) {

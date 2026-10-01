@@ -1,6 +1,6 @@
 # Customer Support Agent
 
-**Status:** Phases 1 and 2 committed; Phase 3 action/case backend reviewed and approved for commit. The backend supports owned conversations, grounded answers, confirmed mock cancellation/address changes, and saved human-review cases. The chat UI is planned for Phase 4. Migrations 009 and 010 were applied to the configured PostgreSQL database on October 1, 2026. Live provider quality remains unverified.
+**Status:** Backend Phases 1–3 committed (`3ce92d9`); Phase 4 UI implemented and awaiting review. The backend supports owned conversations, grounded answers, confirmed mock cancellation/address changes, and saved human-review cases. The customer chat supports demo sign-in, saved conversations, streamed progress, citations, confirmation cards, and case follow-ups. Migrations 009 and 010 were applied to the configured PostgreSQL database on October 1, 2026. Live provider quality remains unverified.
 
 ## Architecture
 
@@ -39,13 +39,13 @@ Simulated sign-in creates an opaque server-owned session token for a fixture cus
 
 ## Phase 2 flow and limits
 
-`providers.py` defines the bounded support-model and Jev adapters. `service.py` validates and records keyword signals before Jev classification, applies a probability threshold, and runs a single model loop with read-only tools. Each model call has context/token checks; every tool call has strict argument validation. Current order details are read again for follow-ups. Up to four prior turns are included, with bounded text and owned order/product references; prior assistant answers are never evidence.
+`providers.py` defines the bounded support-model and Jev adapters. `service.py` validates and records keyword signals before Jev classification, applies a probability threshold, and runs a single model loop with read-only tools. Each model call has context/token checks; every tool call has strict argument validation. Current order details are read again for follow-ups. Order observations include product names/types to distinguish camera bodies from lenses and resolve purchase dates. Up to four prior turns are included, with bounded text and owned order/product references; prior assistant answers are never evidence.
 
-The loop permits eight model turns, six tool executions, a 20,000 reported-token budget, a 120-second deadline, and at most one answer repair. Individual provider requests have timeouts; support-model responses are capped at 1,600 output tokens. The token budget checks provider-reported usage and constrains later requests; it is not an exact pre-billing cost guarantee.
+The loop permits eight model turns, six tool executions, a 20,000 reported-token budget, a 120-second deadline, one schema repair per model decision, and at most one grounding repair for an answer. `DecisionEnvelope` tags tool, answer, clarification, or proposal; mixed branches receive bounded validation feedback. A separate `FinalDecisionEnvelope` excludes tools when completed reads repeat, add no evidence, reach the tool limit, or provide an exact compatibility/case result. Cancellation/address reads close source selection after current order and policy reads. The agent then answers, proposes, or clarifies from the collected facts. Failed attempts retain reported usage and validation diagnostics. Individual provider requests have timeouts; support-model responses are capped at 1,600 output tokens. The token budget checks provider-reported usage and constrains later requests; it is not an exact pre-billing cost guarantee.
 
 Answers contain Markdown paragraphs or lists and grouped exact citations. Deterministic checks reject unknown evidence IDs, unsupported numeric/order references, and obvious execution/refund claims before Jev judges semantic grounding. The application accepts grounding only at probability 0.8 or above. Citation checks establish provenance, not semantic truth; fake-provider tests do not prove live grounding quality. Clarification text receives deterministic checks too.
 
-Missing action details produce a clarification. Explicit human requests, unsupported operations, low confidence, unavailable policy search, and unresolved failures can save a general human-review case. Order-specific return/refund/warranty/damage proposals save owned cases with application-generated IDs and pending-review status. Customer statements remain labeled unverified; no human resolution is simulated. `repository.py` stores conversations and complete run outputs under shared `llm_runs`, with ordered steps, evidence, provider usage, and stop reasons. One active run per conversation prevents interleaved messages; interruption saves a failed outcome and releases the reservation. Process-crash recovery is not implemented.
+Missing action details produce a clarification. Explicit human requests and verified case proposals save human-review cases. Unsupported requests clarify scope. Technical failures, unavailable tools, and exhausted budgets do not automatically create tickets; they save an explainable failed or incomplete outcome. Order-specific return/refund/warranty/damage proposals save owned cases with application-generated IDs and pending-review status. Customer statements remain labeled unverified; no human resolution is simulated. `repository.py` stores conversations and complete run outputs under shared `llm_runs`, with ordered steps, evidence, provider usage, and stop reasons. One active run per conversation prevents interleaved messages; interruption saves a failed outcome and releases the reservation. Process-crash recovery is not implemented.
 
 ## Phase 3 actions and cases
 
@@ -83,7 +83,7 @@ The API prefix is `/agent/customer_support`:
 - `POST /conversations/{id}/runs/{run_id}/replay`: retrieve a committed operation result safely.
 - `POST /conversations/{id}/messages/stream`: the same payload, with SSE `started`, ordered `step`, and persisted `completed` events; heartbeat comments keep the stream active.
 
-Conversation routes require `Authorization: Bearer <demo token>`. Backend routing is registered in `backend/main.py`; the frontend entry remains planned until Phase 4.
+Conversation routes require `Authorization: Bearer <demo token>`. Backend routing is registered in `backend/main.py`; the frontend Support page connects these routes.
 
 ## Run offline checks
 
@@ -92,3 +92,21 @@ LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/c
 ```
 
 No provider calls or external writes occur in these tests. Detailed phase scope and review gates are in `AGENTS.md`.
+
+## Customer chat UI
+
+Open Customer Support from the workspace; the chat opens automatically for one demo account, with no login form or displayed identity. Suggested questions send immediately; Enter sends and Shift+Enter adds a line. Sources appear once after the answer using the shared citation tooltip. Confirm/reject controls apply to a specific persisted proposal; saved receipts disable completed controls. Case status buttons send a follow-up message.
+
+New chat immediately creates a fresh conversation. The demo session token is retained in sessionStorage, so saved chats are available within the same browser tab/session. Conversation and run references are in the URL; IDs are not shown in the header. Full workflow details and usage appear in a separate Admin view to the right (below on narrow screens); the customer chat shows simple progress. Exact order-list requests render current owned records directly without model calls; broader requests use the bounded agent. The shared header architecture button opens the support diagram.
+
+Phase 4 uses shared CitationTooltip, MarkdownContent, TaskScroll/taskTrail, ArchitectureModal, and architecture stage nodes. Policy fixtures were explicitly ingested with mock vectors locally; quality remains unverified. Build/lint and 22 frontend tests pass, including support SSE failure/partial-frame coverage. Rendered desktop/mobile checks used fake API responses for sign-in, suggestion submission, clearing input, confirmation/receipt, case display, tooltip/modal, new-chat reset, and viewport overflow. No live LLM or embedding calls were made.
+
+## Explicit live smoke
+
+After the offline gate, with authorization for paid calls:
+
+```sh
+LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m backend.customer_support.support_smoke --live --limit 9
+```
+
+Varied prompts exercise real support/Jev providers, streaming, saved conversations, proposals, review cases, and a ticket follow-up. Records use isolated in-memory SQLite and the existing explicitly ingested mock policy vectors. No proposal is confirmed. Full results and usage save to `/tmp/support-smoke.json`; this command is excluded from unittest discovery.

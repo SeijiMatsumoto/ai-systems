@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { backfillCompany, getResearchRun, getResearchRuns, streamResearch } from './api'
 import IncidentWorkspace from './IncidentWorkspace'
 import KnowledgeAssistant from './KnowledgeAssistant'
+import SupportAssistant from './SupportAssistant'
 import ArchitectureModal from './ArchitectureModal'
 import ResearchRunView from './ResearchRunView'
 import { CitationTooltip, CitationTooltipProvider } from './components/CitationTooltip'
@@ -92,9 +93,9 @@ const TOOLS: ToolDefinition[] = [
     shortTitle: 'Support',
     category: 'Customer operations',
     description: 'Combine policy answers and account tools with action checks and human escalation.',
-    availability: 'planned',
-    flow: ['Customer message', 'Policy + account lookup', 'Policy gate', 'Answer or handoff'],
-    input: 'An authenticated synthetic customer conversation with mock orders and policy records.',
+    availability: 'ready',
+    flow: ['Request checks + Jev', 'Scoped policy + orders', 'Verify answer or proposal', 'Confirm change / review case'],
+    input: 'A simulated customer conversation with mock orders and policy records.',
     output: 'A policy-cited answer, a confirmed action state, or a reasoned human escalation.',
     boundary: 'Account state comes from APIs; policy and ownership checks govern every action.',
     firstSlice: 'One policy answer, one eligible cancellation, one blocked action, and one escalation.',
@@ -240,7 +241,7 @@ function ToolRail({
       </nav>
       <div className="rail-footer">
         <span className="availability-dot ready" />
-        3 runnable · 2 architecture scaffolds
+        4 runnable · 1 architecture scaffold
       </div>
     </aside>
   )
@@ -251,10 +252,10 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
     <section className="catalog-view">
       <div className="catalog-intro">
         <p className="section-kicker">Workbench</p>
-        <h1>Five AI system designs. Three runnable demos.</h1>
+        <h1>Five AI system designs. Four runnable demos.</h1>
         <p>
           Compare the request flow, model boundary, and output of common interview systems.
-          Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Coding Agent and Customer Support remain planned.
+          Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Customer Support answers camera-shop questions and routes checked order changes or human-review cases. Coding Agent remains planned.
         </p>
       </div>
 
@@ -287,7 +288,7 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
     <section className="scaffold-view">
       <div className="scaffold-heading">
         <span className="scaffold-number">{tool.number}</span>
-      <StatusPill status={tool.id === 'knowledge-action' ? 'Runnable demo' : 'Architecture scaffold'} />
+      <StatusPill status={tool.availability === 'ready' ? 'Runnable demo' : 'Architecture scaffold'} />
       </div>
       <p className="section-kicker">{tool.category}</p>
       <h1>{tool.title}</h1>
@@ -309,10 +310,11 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
         <div><span>First runnable slice</span><p>{tool.firstSlice}</p></div>
       </div>
       {tool.id === 'knowledge-action' && <KnowledgeAssistant />}
+      {tool.id === 'customer-support' && <SupportAssistant />}
       <p className="scaffold-note">
         {tool.id === 'knowledge-action'
           ? 'Ingestion, retrieval, cited answers, and approval-gated mock support tasks run. Demo personas and approvers are simulated; task records stay local.'
-          : 'Architecture and proposed contracts only. No agent or API is connected yet.'}
+          : tool.id === 'customer-support' ? 'Synthetic orders, confirmed mock changes, and saved human-review cases run. No payments or external tickets are created.' : 'Architecture and proposed contracts only. No agent or API is connected yet.'}
         {' '}See <code>{tool.sourcePath}README.md</code> in the repository.
       </p>
     </section>
@@ -1121,7 +1123,7 @@ export default function App() {
             {!selectedTool && <ToolCatalog onSelect={navigateToTool} />}
             {selectedTool?.id === 'incident-investigation' && <IncidentWorkspace />}
             {selectedTool?.id === 'research' && <ResearchWorkspace />}
-            {(selectedTool?.availability === 'planned' || selectedTool?.id === 'knowledge-action') && <SystemScaffold tool={selectedTool} />}
+            {(selectedTool?.availability === 'planned' || selectedTool?.id === 'knowledge-action' || selectedTool?.id === 'customer-support') && <SystemScaffold tool={selectedTool} />}
           </main>
         </div>
       </div>

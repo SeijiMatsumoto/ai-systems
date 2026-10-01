@@ -287,8 +287,8 @@ class ActionTests(test_workflow.ApiTests):
             404,
         )
         result = self.propose(order="order-2001")
-        self.assertEqual(result["disposition"], "case_created")
-        self.assertIsNone(result["review_case"]["order_id"])
+        self.assertEqual(result["disposition"], "handoff_needed")
+        self.assertIsNone(result["review_case"])
         self.assertIsNone(result["pending_action"])
 
     def test_yes_does_not_execute(self):

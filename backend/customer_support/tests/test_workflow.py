@@ -5,11 +5,11 @@ import json
 import tempfile
 import unittest
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -126,6 +126,40 @@ def answer(text="Your order is paid and unfulfilled.", ids=("S1",)):
     )
 
 
+def fake_agent_run(turn, usage):
+    from backend.customer_support.contracts import DecisionEnvelope
+
+    kind = next(
+        key
+        for key in ("tool", "answer", "clarification", "proposal")
+        if getattr(turn, key) is not None
+    )
+    envelope = DecisionEnvelope.model_validate(
+        {"action": {"kind": kind, "decision": turn.decision, kind: getattr(turn, kind)}}
+    )
+
+    class Run:
+        result = SimpleNamespace(output=envelope)
+
+        def __init__(self):
+            self.usage = usage
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        def all_messages(self):
+            return []
+
+    @asynccontextmanager
+    async def iterate(*args, **kwargs):
+        yield Run()
+
+    return Mock(side_effect=iterate)
+
+
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.store = MockStore.load()
@@ -139,6 +173,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         question="Where is order-1001?",
         index=True,
         history=None,
+        operations_enabled=False,
     ):
         return await run_support(
             SupportRequest(conversation_id="chat-1", message=question),
@@ -150,7 +185,61 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.embedder,
             str(uuid4()),
             history,
+            operations_enabled=operations_enabled,
         )
+
+    async def test_simple_order_list_skips_models_and_returns_all_owned_orders(self):
+        model = ScriptModel([])
+        judge = FakeJudge()
+        result = await self.run_case(model, judge, question="What are my orders?")
+        self.assertEqual(result.disposition, "answered")
+        self.assertEqual(result.stop_reason, "owned_order_list")
+        self.assertIn("| Ordered | Items | Payment | Delivery |", result.answer)
+        self.assertEqual(len(result.evidence), 5)
+        self.assertEqual(model.calls, [])
+        self.assertEqual(judge.calls, [])
+        self.assertNotIn("order-2001", result.answer)
+
+    async def test_order_listing_with_provider_decimal_cost(self):
+        from decimal import Decimal
+
+        class CostModel(ScriptModel):
+            async def turn(self, state, run_id):
+                output, usage = await super().turn(state, run_id)
+                return output, {
+                    **usage,
+                    "cost": Decimal("0.0003452"),
+                    "details": {"reasoning_tokens": 51},
+                }
+
+        def list_answer(state):
+            facts = [
+                item
+                for observation in state["observations"]
+                for item in observation["results"]
+                if "evidence_id" in item
+            ]
+            return answer(
+                "Your orders are order-1001, order-1002, order-1003, order-1004, and order-1005.",
+                tuple(item["evidence_id"] for item in facts[-5:]),
+            )
+
+        result = await self.run_case(
+            CostModel(
+                [
+                    tool("order_list"),
+                    *[
+                        tool("order_detail", order_id=f"order-{number}")
+                        for number in range(1001, 1006)
+                    ],
+                    list_answer,
+                ]
+            ),
+            question="Summarize the details of all my orders.",
+        )
+        self.assertEqual(result.disposition, "answered")
+        self.assertEqual(result.steps[5].details["usage"]["cost"], "0.0003452")
+        self.assertNotIn("failure", [step.stage for step in result.steps])
 
     async def test_multi_tool_policy_and_order(self):
         def draft(state):
@@ -228,11 +317,32 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             result = await self.run_case(
                 model, FakeJudge(intent=intent), question="Refund this order"
             )
-            self.assertEqual(result.disposition, "handoff_needed")
-            self.assertIn("no case has been created", result.answer)
+            self.assertEqual(
+                result.disposition,
+                "clarification" if intent == Intent.UNSUPPORTED else "handoff_needed",
+            )
+            if intent != Intent.UNSUPPORTED:
+                self.assertIn("no case has been created", result.answer)
             self.assertEqual(model.calls, [])
-        result = await self.run_case(ScriptModel([]), FakeJudge(probability=0.5))
+        result = await self.run_case(
+            ScriptModel([]), FakeJudge(intent=Intent.UNSUPPORTED, probability=0.5)
+        )
         self.assertEqual(result.disposition, "clarification")
+
+    async def test_uncertain_information_or_action_can_read_and_answer(self):
+        for intent in (Intent.INFORMATION, Intent.ACTION):
+            model = ScriptModel([tool("order_detail", order_id="order-1001"), answer()])
+            result = await self.run_case(
+                model,
+                FakeJudge(intent=intent, probability=0.68),
+                question="Can I cancel my unshipped camera order?",
+                operations_enabled=True,
+            )
+            self.assertEqual(result.disposition, "answered")
+            self.assertFalse(model.calls[0]["operation_proposals_enabled"])
+            self.assertIsNone(result.pending_action)
+            self.assertIsNone(result.review_case)
+            self.assertTrue(any(s.stage == "intent_route_check" for s in result.steps))
 
     async def test_precheck_rejects_before_judge(self):
         judge = FakeJudge()
@@ -264,11 +374,62 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.stop_reason, "provider_or_validation_failure")
         self.assertEqual(result.steps[-1].stage, "stop")
 
-    async def test_tool_budget(self):
+    async def test_repeated_tool_stops_before_budget(self):
         model = ScriptModel([tool("order_list")] * 7)
         result = await self.run_case(model)
-        self.assertEqual(result.stop_reason, "tool_budget")
-        self.assertEqual(len([s for s in result.steps if s.stage == "tool_result"]), 6)
+        self.assertEqual(result.stop_reason, "invalid_final_decision")
+        self.assertEqual(len([s for s in result.steps if s.stage == "tool_result"]), 1)
+
+    async def test_repeated_read_gets_terminal_answer_instead_of_fallback(self):
+        model = ScriptModel(
+            [
+                tool("order_detail", order_id="order-1001"),
+                tool("order_detail", order_id="order-1001"),
+                answer(),
+            ]
+        )
+        result = await self.run_case(model)
+        self.assertEqual(result.disposition, "answered")
+        self.assertTrue(model.calls[-1]["final_decision_only"])
+        self.assertEqual(model.calls[-1]["tools"], {})
+        self.assertEqual(len([s for s in result.steps if s.stage == "tool_result"]), 1)
+
+    async def test_reworded_policy_search_closes_when_evidence_repeats(self):
+        model = ScriptModel(
+            [
+                tool("policy_search", query="returns"),
+                tool("policy_search", query="returns "),
+                ModelTurn(
+                    decision="Ask missing detail",
+                    clarification="Which item would you like to return?",
+                ),
+            ]
+        )
+        result = await self.run_case(model, question="What is your return policy?")
+        self.assertTrue(model.calls[-1]["final_decision_only"])
+        self.assertEqual(result.disposition, "clarification")
+        self.assertTrue(
+            any(
+                s.stage == "source_selection_closed"
+                and s.details["reason"] == "no_new_evidence"
+                for s in result.steps
+            )
+        )
+
+    async def test_order_observations_include_product_identity(self):
+        model = ScriptModel(
+            [
+                tool("order_list"),
+                ModelTurn(
+                    decision="Resolve target",
+                    clarification="Would you like to cancel the EOS R50?",
+                ),
+            ]
+        )
+        await self.run_case(model)
+        facts = json.loads(model.calls[-1]["observations"][0]["results"][0]["text"])
+        self.assertEqual(facts["lines"][0]["product_name"], "Canon EOS R50")
+        self.assertEqual(facts["lines"][0]["product_kind"], "body")
 
     async def test_grounding_repair_once(self):
         model = ScriptModel(
@@ -371,11 +532,8 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_adapter_shape(self):
         fake = SimpleNamespace(
-            run=AsyncMock(
-                return_value=SimpleNamespace(
-                    output=answer(),
-                    usage=RunUsage(requests=1, input_tokens=7, output_tokens=2),
-                )
+            iter=fake_agent_run(
+                answer(), RunUsage(requests=1, input_tokens=7, output_tokens=2)
             )
         )
         with patch("backend.customer_support.providers.Agent", return_value=fake):
@@ -384,8 +542,43 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         assert output.answer is not None
         self.assertEqual(output.answer.claims[0].evidence_ids, ("S1",))
         self.assertEqual(usage["input_tokens"], 7)
-        self.assertEqual(fake.run.call_args.kwargs["metadata"]["run_id"], "run-1")
-        self.assertEqual(fake.run.call_args.kwargs["usage_limits"].request_limit, 1)
+        self.assertEqual(fake.iter.call_args.kwargs["metadata"]["run_id"], "run-1")
+        self.assertEqual(fake.iter.call_args.kwargs["usage_limits"].request_limit, 2)
+
+    async def test_review_case_judgment_has_its_own_criteria(self):
+        response = SimpleNamespace(
+            model="fake",
+            nouls={"supported": SimpleNamespace(noul=0.9)},
+            usage=SimpleNamespace(model_dump=dict),
+        )
+        provider = LiveJevJudge()
+        with patch.object(provider, "_ask", AsyncMock(return_value=response)) as ask:
+            await provider.ground({"proposal": {"kind": "create_case"}})
+            case_question = ask.call_args.args[1]["supported"]
+            self.assertIn("HUMAN REVIEW CASE", case_question.instructions)
+            self.assertIn("do not block recording", case_question.instructions)
+            await provider.ground({"claims": []})
+            self.assertNotEqual(
+                case_question.criteria, ask.call_args.args[1]["supported"].criteria
+            )
+
+    def test_terminal_wire_schema_rejects_tool_and_uncited_explanation(self):
+        from backend.customer_support.contracts import FinalDecisionEnvelope
+
+        for action in (
+            {
+                "kind": "tool",
+                "decision": "Read",
+                "tool": {"name": "order_list", "arguments": {}},
+            },
+            {
+                "kind": "clarification",
+                "decision": "Ask",
+                "clarification": "Which camera? It qualifies for a refund.",
+            },
+        ):
+            with self.subTest(action=action), self.assertRaises(ValidationError):
+                FinalDecisionEnvelope.model_validate({"action": action})
 
     async def test_jev_adapter_shape(self):
         provider = LiveJevJudge()
@@ -631,6 +824,30 @@ class ApiTests(unittest.TestCase):
         )
         with Session(self.engine) as db:
             self.assertEqual(next(iter(db.scalars(select(LlmRun)))).status, "failed")
+            self.assertEqual(list(db.scalars(select(SupportCase))), [])
+
+    def test_failed_wire_validation_preserves_usage_without_creating_case(self):
+        from backend.customer_support.providers import ModelBoundaryFailure
+
+        self.model.script = [
+            ModelBoundaryFailure(
+                "UnexpectedModelBehavior",
+                "Mixed decision",
+                {"requests": 2, "input_tokens": 80},
+                [{"part_kind": "retry-prompt"}],
+            )
+        ]
+        response = self.client.post(
+            self.base + f"/conversations/{self.conversation}/messages",
+            headers=self.headers,
+            json={"message": "Can I cancel my camera order?"},
+        )
+        result = response.json()
+        self.assertEqual(result["stop_reason"], "provider_or_validation_failure")
+        self.assertEqual(result["usage"]["failed_model"]["requests"], 2)
+        self.assertIsNone(result["review_case"])
+        with Session(self.engine) as db:
+            self.assertEqual(list(db.scalars(select(SupportCase))), [])
 
     def test_busy_conversation_rejects_second_run(self):
         from uuid import UUID
@@ -701,3 +918,145 @@ class PolicyRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        guard = patch(
+            "pydantic_ai.models.openai.OpenAIResponsesModel.request",
+            side_effect=AssertionError("Live providers are forbidden in offline tests"),
+        )
+        guard.start()
+        self.addCleanup(guard.stop)
+
+    async def test_terminal_schema_is_used_by_real_adapter(self):
+        from pydantic_ai import Agent
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        from backend.customer_support.contracts import DecisionEnvelope
+
+        def respond(messages, info):
+            schema = json.dumps(info.output_tools[0].parameters_json_schema)
+            self.assertNotIn('"ToolDecision"', schema)
+            self.assertIn('"AnswerDecision"', schema)
+            draft = answer().answer
+            assert draft is not None
+            action = {
+                "kind": "answer",
+                "decision": "Answer from completed observations",
+                "answer": draft.model_dump(mode="json"),
+            }
+            return ModelResponse(
+                parts=[ToolCallPart(info.output_tools[0].name, {"action": action})]
+            )
+
+        adapter = LiveSupportModel()
+        adapter.agent = Agent(
+            FunctionModel(respond), output_type=DecisionEnvelope, retries=1
+        )
+        output, usage = await adapter.turn({"final_decision_only": True}, "fake-run")
+        self.assertIsNotNone(output.answer)
+        self.assertEqual(usage["requests"], 1)
+
+    async def test_usage_serialization_matches_real_provider_shape(self):
+        from decimal import Decimal
+        from unittest.mock import patch
+
+        from pydantic_ai.usage import RunUsage
+
+        from backend.customer_support.providers import LiveSupportModel
+
+        adapter = LiveSupportModel()
+        usage = RunUsage(
+            input_tokens=1138,
+            output_tokens=98,
+            requests=1,
+            cost=Decimal("0.0003452"),
+            details={"reasoning_tokens": 51},
+        )
+        with patch.object(
+            adapter.agent, "iter", fake_agent_run(tool("order_list"), usage)
+        ):
+            output, counts = await adapter.turn(
+                {"remaining_token_budget": 19000}, "fake-run"
+            )
+        self.assertEqual(counts["cost"], "0.0003452")
+        self.assertEqual(counts["details"]["reasoning_tokens"], 51)
+        self.assertIsNotNone(output.tool)
+        import json
+
+        json.dumps(counts)
+
+    async def test_mixed_output_repairs_once_through_real_adapter(self):
+        from pydantic_ai import Agent
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        from backend.customer_support.contracts import DecisionEnvelope
+
+        calls = []
+
+        def respond(messages, info):
+            calls.append(messages)
+            action: dict[str, Any] = {
+                "kind": "clarification",
+                "decision": "Ask which item",
+                "clarification": "Which camera do you mean?",
+            }
+            if len(calls) == 1:
+                action["tool"] = {"name": "order_list", "arguments": {}}
+            return ModelResponse(
+                parts=[ToolCallPart(info.output_tools[0].name, {"action": action})]
+            )
+
+        adapter = LiveSupportModel()
+        adapter.agent = Agent(
+            FunctionModel(respond), output_type=DecisionEnvelope, retries=1
+        )
+        result, usage = await adapter.turn({"message": "Which order?"}, "fake-run")
+        self.assertEqual(result.clarification, "Which camera do you mean?")
+        self.assertEqual(usage["requests"], 2)
+        self.assertEqual(usage["output_repairs"], 1)
+        self.assertTrue(
+            any(
+                part.part_kind == "retry-prompt"
+                for message in calls[-1]
+                for part in message.parts
+            )
+        )
+
+    async def test_exhausted_validation_preserves_diagnostics_and_usage(self):
+        from pydantic_ai import Agent
+        from pydantic_ai.messages import ModelResponse, ToolCallPart
+        from pydantic_ai.models.function import FunctionModel
+
+        from backend.customer_support.contracts import DecisionEnvelope
+        from backend.customer_support.providers import ModelBoundaryFailure
+
+        def respond(messages, info):
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "action": {
+                                "kind": "clarification",
+                                "decision": "Ask",
+                                "clarification": "Which order?",
+                                "tool": {"name": "order_list", "arguments": {}},
+                            }
+                        },
+                    )
+                ]
+            )
+
+        adapter = LiveSupportModel()
+        adapter.agent = Agent(
+            FunctionModel(respond), output_type=DecisionEnvelope, retries=1
+        )
+        with self.assertRaises(ModelBoundaryFailure) as caught:
+            await adapter.turn({"message": "Which order?"}, "fake-run")
+        self.assertEqual(caught.exception.usage["requests"], 2)
+        self.assertEqual(caught.exception.error_type, "UnexpectedModelBehavior")
+        self.assertTrue(caught.exception.diagnostics)

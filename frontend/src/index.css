@@ -771,7 +771,7 @@ pre,
 .knowledge-follow-up-suggestion button:hover { border-color: var(--accent); background: var(--accent-soft); }
 .knowledge-action-approval label { display: grid; min-width: 0; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .knowledge-action-approval select { width: 100%; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; color: var(--ink); font-size: 12px; font-weight: 500; text-transform: capitalize; }
-.knowledge-action-buttons { display: flex; align-items: center; gap: 8px; }
+.knowledge-action-buttons { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .knowledge-action-buttons .primary-button,
 .knowledge-reject-button { min-height: 38px; padding: 0 13px; font-size: 11px; }
 .knowledge-reject-button { border: 1px solid var(--line-strong); border-radius: 8px; background: white; color: var(--muted); font-weight: 650; cursor: pointer; }

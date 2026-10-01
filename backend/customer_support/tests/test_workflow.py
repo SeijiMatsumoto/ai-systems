@@ -32,6 +32,7 @@ from backend.customer_support.contracts import (
     Order,
     PolicyIndex,
     SupportRequest,
+    TaskRoute,
     ToolCall,
 )
 from backend.customer_support.providers import LiveJevJudge, LiveSupportModel
@@ -67,6 +68,23 @@ class FakeJudge:
         self.probability = probability
         self.grounding = grounding
         self.calls = []
+        self.route_decision: TaskRoute | None = None
+
+    async def route_task(self, state):
+        self.calls.append(("continuation", copy.deepcopy(state)))
+        if self.route_decision:
+            return self.route_decision
+        if len(state["tasks"]) == 1:
+            return TaskRoute(
+                route="resume",
+                task_id=state["tasks"][0]["task_id"],
+                usage={"input_tokens": 40, "output_tokens": 2},
+            )
+        return TaskRoute(
+            route="clarify",
+            probability=0.5,
+            usage={"input_tokens": 40, "output_tokens": 2},
+        )
 
     async def classify(self, state):
         self.calls.append(("intent", copy.deepcopy(state)))

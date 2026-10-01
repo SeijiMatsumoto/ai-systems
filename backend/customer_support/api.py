@@ -29,12 +29,20 @@ from .contracts import (
     SupportRequest,
     SupportResponse,
     SupportStep,
+    TaskRoute,
 )
-from .providers import Judge, LiveJevJudge, LiveSupportModel, SupportModel
+from .providers import (
+    Judge,
+    LiveJevJudge,
+    LiveSupportModel,
+    ModelBoundaryFailure,
+    SupportModel,
+)
 from .repository import ConversationBusy, SupportRepository
 from .retrieval import IndexUnavailable, load_index
 from .service import run_support
 from .store import MockStore
+from .task_routing import route_message
 
 router = APIRouter(prefix="/agent/customer_support", tags=["customer_support"])
 
@@ -164,6 +172,7 @@ async def execute(
     checkpoint = None
 
     def capture(step):
+        step = step.model_copy(update={"sequence": len(saved_steps) + 1})
         saved_steps.append(step)
         if on_step and step.stage != "stop":
             on_step(step)
@@ -177,8 +186,30 @@ async def execute(
         )
         try:
             repo.attach_trace(token, conversation_id, run_id, trace_id)
-            checkpoint, resumed = repo.task_for_message(
-                token, conversation_id, run_id, request.message
+            candidates = repo.routing_candidates(token, conversation_id)
+
+            def route_step(stage, state):
+                capture(SupportStep(sequence=1, stage=stage, details=state))
+
+            route, _route_state, source = await route_message(
+                request,
+                context,
+                candidates,
+                deps.judge,
+                on_precheck=lambda state: route_step("continuation_precheck", state),
+                on_input=lambda state: route_step("continuation_input", state),
+            )
+            route_step(
+                "continuation_check",
+                {
+                    "source": source,
+                    "decision": route.model_dump(mode="json"),
+                    "threshold": 0.8,
+                    "minimum_confidence_gap": 0.1,
+                },
+            )
+            checkpoint, resumed = repo.apply_task_route(
+                token, conversation_id, run_id, request.message, route
             )
             if checkpoint:
                 context = [
@@ -190,45 +221,124 @@ async def execute(
                         proposal_ids=(checkpoint.pending_proposal_id,)
                         if checkpoint.pending_proposal_id
                         else (),
+                        case_ids=checkpoint.case_ids,
                     ),
                 ]
-            result = await run_support(
-                SupportRequest(
-                    conversation_id=str(conversation_id), message=request.message
-                ),
-                deps.store,
-                repo.customer_store(deps.store, customer_id),
-                deps.model,
-                deps.judge,
-                deps.index,
-                deps.embedder,
-                str(run_id),
-                context,
-                capture,
-                operations_enabled=True,
-                case_lookup=lambda key: repo.case(token, conversation_id, key),
-                pending_ids=repo.pending(token, conversation_id),
-                task_checkpoint=checkpoint,
-                task_resumed=resumed,
+            if (
+                route.route == "clarify"
+                or route.route == "abandon"
+                or (
+                    route.route == "correct"
+                    and checkpoint
+                    and checkpoint.status == "awaiting_approval"
+                )
+            ):
+                reason = "task_reference_ambiguous"
+                answer = "Which earlier request do you mean? Please mention the item or what you wanted to do."
+                disposition = "clarification"
+                if (
+                    route.route in {"abandon", "correct"}
+                    and checkpoint
+                    and checkpoint.status == "awaiting_approval"
+                ):
+                    reason = "explicit_rejection_required"
+                    answer = "Please reject the existing proposal using its card before changing or abandoning that request."
+                elif route.route == "abandon":
+                    reason = "task_abandoned"
+                    answer = "Okay, I’ve stopped that request."
+                    disposition = "answered"
+                capture(
+                    SupportStep(
+                        sequence=1,
+                        stage="stop",
+                        details={"reason": reason, "disposition": disposition},
+                    )
+                )
+                result = SupportResponse(
+                    run_id=str(run_id),
+                    conversation_id=str(conversation_id),
+                    disposition=disposition,
+                    answer=answer,
+                    stop_reason=reason,
+                    fixture_version=deps.store.fixture.version,
+                )
+            else:
+                result = await run_support(
+                    SupportRequest(
+                        conversation_id=str(conversation_id), message=request.message
+                    ),
+                    deps.store,
+                    repo.customer_store(deps.store, customer_id),
+                    deps.model,
+                    deps.judge,
+                    deps.index,
+                    deps.embedder,
+                    str(run_id),
+                    context,
+                    capture,
+                    operations_enabled=True,
+                    case_lookup=lambda key: repo.case(token, conversation_id, key),
+                    pending_ids=repo.pending(token, conversation_id),
+                    task_checkpoint=checkpoint,
+                    task_resumed=resumed,
+                    initial_usage={"continuation": route.usage}
+                    if route.usage
+                    else None,
+                )
+            if checkpoint is None and result.approved_operation is not None:
+                kind = result.approved_operation.kind
+                checkpoint, _ = repo.apply_task_route(
+                    token,
+                    conversation_id,
+                    run_id,
+                    request.message,
+                    TaskRoute.model_validate(
+                        {
+                            "route": "new",
+                            "task_kind": "human_review"
+                            if kind == "create_case"
+                            else kind,
+                        }
+                    ),
+                )
+            result = result.model_copy(
+                update={
+                    "task": checkpoint,
+                    "steps": tuple(saved_steps),
+                    "usage": {
+                        **result.usage,
+                        **({"continuation": route.usage} if route.usage else {}),
+                    },
+                }
             )
-            result = result.model_copy(update={"task": checkpoint})
-        except BaseException:
+        except BaseException as exc:
+            reason = (
+                "interrupted"
+                if isinstance(exc, asyncio.CancelledError)
+                else "provider_or_validation_failure"
+            )
             interrupted = SupportStep(
                 sequence=len(saved_steps) + 1,
                 stage="stop",
-                details={"reason": "interrupted", "disposition": "handoff_needed"},
+                details={
+                    "reason": reason,
+                    "disposition": "handoff_needed",
+                    "error_type": type(exc).__name__,
+                },
             )
             result = SupportResponse(
                 run_id=str(run_id),
                 conversation_id=str(conversation_id),
                 disposition="handoff_needed",
                 answer="The support check was interrupted. Please retry.",
-                stop_reason="interrupted",
+                stop_reason=reason,
                 steps=(*saved_steps, interrupted),
                 fixture_version=deps.store.fixture.version,
                 task=checkpoint,
             )
-            repo.finish(token, conversation_id, request.message, result)
+            result = repo.finish(token, conversation_id, request.message, result)
+            if isinstance(exc, (TimeoutError, ConnectionError, ModelBoundaryFailure)):
+                return result
             raise
         try:
             result = repo.finish(

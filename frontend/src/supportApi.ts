@@ -18,8 +18,8 @@ export async function supportSignIn(customerId: string): Promise<{ token: string
 export async function supportNewChat(token: string): Promise<{ conversation_id: string }> { return (await request('/conversations', token, { method: 'POST' })).json() }
 export async function supportChats(token: string): Promise<SupportConversation[]> { return (await request('/conversations', token)).json() }
 export async function supportHistory(token: string, chat: string): Promise<SupportTurn[]> { return (await request(`/conversations/${chat}`, token)).json() }
-export async function supportMessage(token: string, chat: string, message: string, onStep: (step: SupportStep) => void, onStarted: (id: string) => void, signal: AbortSignal): Promise<SupportResult> {
-  return readSupportStream(await request(`/conversations/${chat}/messages/stream`, token, { method: 'POST', body: JSON.stringify({ message }), signal }), onStep, onStarted)
+export async function supportMessage(token: string, chat: string, message: string, onStep: (step: SupportStep) => void, onStarted: (id: string) => void, signal: AbortSignal, taskId?: string): Promise<SupportResult> {
+  return readSupportStream(await request(`/conversations/${chat}/messages/stream`, token, { method: 'POST', body: JSON.stringify({ message, ...(taskId ? { task_id: taskId } : {}) }), signal }), onStep, onStarted)
 }
 export async function supportDecide(token: string, chat: string, proposal: string, decision: 'confirm' | 'reject'): Promise<SupportResult> {
   return (await request(`/conversations/${chat}/proposals/${proposal}/decision`, token, { method: 'POST', body: JSON.stringify({ decision }) })).json()

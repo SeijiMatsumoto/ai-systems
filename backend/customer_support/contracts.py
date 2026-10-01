@@ -235,6 +235,7 @@ class DemoSignIn(Record):
 
 class MessageRequest(Record):
     message: Text
+    task_id: Identifier | None = None
 
 
 class PolicySearchArgs(Record):
@@ -498,6 +499,7 @@ def scoped_decision_envelope(names: tuple[str, ...]) -> type[DecisionEnvelope]:
 
 
 class ConversationTurn(Record):
+    task_id: Identifier | None = None
     case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     proposal_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     order_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
@@ -512,9 +514,29 @@ class SupportStep(Record):
     details: dict = Field(default_factory=dict)
 
 
+TaskKind = Literal["cancel_order", "change_address", "human_review"]
+
+
+class TaskRoute(Record):
+    route: Literal["new", "resume", "correct", "abandon", "clarify"]
+    task_id: Identifier | None = None
+    task_kind: TaskKind | None = None
+    probability: float = Field(default=1, ge=0, le=1)
+    confidence_gap: float | None = Field(default=None, ge=0, le=1)
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def target_required(self):
+        if self.route in {"resume", "correct", "abandon"} and self.task_id is None:
+            raise ValueError("Continuation requires a task target")
+        if self.route in {"new", "clarify"} and self.task_id is not None:
+            raise ValueError("New or ambiguous route cannot select a task")
+        return self
+
+
 class TaskCheckpoint(Record):
     task_id: Identifier
-    kind: Literal["cancel_order"] = "cancel_order"
+    kind: TaskKind = "cancel_order"
     status: Literal[
         "active",
         "awaiting_clarification",
@@ -522,6 +544,7 @@ class TaskCheckpoint(Record):
         "awaiting_approval",
         "completed",
         "failed",
+        "abandoned",
     ] = "active"
     goal: Annotated[str, Field(min_length=1, max_length=1000)]
     selected_order_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
@@ -532,6 +555,7 @@ class TaskCheckpoint(Record):
     completed_steps: tuple[Identifier, ...] = Field(default=(), max_length=40)
     evidence_run_id: Identifier | None = None
     evidence_ids: tuple[Identifier, ...] = Field(default=(), max_length=30)
+    case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
 
 
 class SupportResponse(Record):

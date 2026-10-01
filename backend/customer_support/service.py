@@ -54,6 +54,17 @@ EXECUTION = re.compile(
 )
 
 
+def is_confirmation_reply(message):
+    """Cheap continuation signal; never authority to execute a proposal."""
+    return bool(
+        re.fullmatch(
+            r"(?:(?:yes|ok|okay)[, ]+)?(?:yes|no|ok|okay|confirm|go ahead(?: and (?:do|cancel) it)?|(?:please )?(?:do|cancel) (?:it|that)(?: for me)?|proceed(?: with (?:it|that))?|yes,? cancel please|cancel please)(?: please)?[.! ]*",
+            message.strip(),
+            re.IGNORECASE,
+        )
+    )
+
+
 def precheck(request: SupportRequest, history: list[ConversationTurn]) -> dict:
     message = " ".join(request.message.split())
     if not re.search(r"[a-zA-Z0-9]", message):
@@ -121,8 +132,10 @@ async def run_support(
     pending_ids: list[str] | None = None,
     task_checkpoint: TaskCheckpoint | None = None,
     task_resumed: bool = False,
+    initial_usage: dict | None = None,
 ) -> SupportResponse:
     steps, catalog, usage = [], {}, {}
+    usage.update(initial_usage or {})
     tool_count = 0
     repairs = 0
     deadline = asyncio.get_running_loop().time() + 120
@@ -203,7 +216,7 @@ async def run_support(
                 if p.product_id in recent_text
             ],
         }
-        if task_checkpoint and task_checkpoint.selected_order_ids:
+        if task_checkpoint:
             state["references"]["owned_order_ids"] = [
                 key
                 for key in task_checkpoint.selected_order_ids
@@ -222,7 +235,9 @@ async def run_support(
                 checkpoint=task_checkpoint.model_dump(mode="json"),
                 current_state_refresh_required=True,
             )
-            if task_checkpoint.status == "awaiting_approval":
+            if task_checkpoint.status == "awaiting_approval" and is_confirmation_reply(
+                state["message"]
+            ):
                 step(
                     "confirmation_route_check",
                     pending_proposal_ids=pending_ids or [],
@@ -230,7 +245,7 @@ async def run_support(
                 )
                 return finish(
                     "clarification",
-                    "Please confirm or reject the existing cancellation using its confirmation card.",
+                    "Please confirm or reject the existing request using its confirmation card.",
                     "explicit_confirmation_required",
                 )
         if re.fullmatch(
@@ -307,6 +322,21 @@ async def run_support(
         step("intent_input", state=state, model=judge.model_id)
         judgment = await bounded(judge.classify(state), 15)
         usage["intent"] = judgment.usage
+        if (
+            task_checkpoint
+            and task_checkpoint.status == "awaiting_approval"
+            and judgment.intent == Intent.ACTION
+        ):
+            step(
+                "confirmation_route_check",
+                pending_proposal_ids=pending_ids or [],
+                task_id=task_checkpoint.task_id,
+            )
+            return finish(
+                "clarification",
+                "Please confirm or reject the existing request using its confirmation card.",
+                "explicit_confirmation_required",
+            )
         step(
             "intent_judgment",
             judgment=judgment.model_dump(mode="json"),
@@ -379,6 +409,7 @@ async def run_support(
         if (
             task_resumed
             and task_checkpoint
+            and task_checkpoint.kind in {"cancel_order", "change_address"}
             and len(state["references"]["owned_order_ids"]) == 1
         ):
             order_id = state["references"]["owned_order_ids"][0]

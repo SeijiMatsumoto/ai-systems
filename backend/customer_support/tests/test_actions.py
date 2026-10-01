@@ -3,7 +3,7 @@
 import copy
 import unittest
 from typing import TypeVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -22,6 +22,7 @@ from backend.customer_support.contracts import (
     ConfirmationRequest,
     Intent,
     ModelTurn,
+    TaskRoute,
 )
 from backend.customer_support.repository import SupportRepository
 from backend.customer_support.tests import test_workflow
@@ -54,6 +55,138 @@ def require_row(db: Session, model: type[Row], key: object) -> Row:
 
 
 class ActionTests(test_workflow.ApiTests):
+    def test_routing_timeout_preserves_tasks_and_saves_failure_without_case(self):
+        first = self.propose()
+        second = self.propose(
+            "change_address",
+            address=Address(
+                line1="200 Demo Road",
+                city="Exampleville",
+                postal_code="12345",
+                country="US",
+            ),
+        )
+        before = len(self.model.calls)
+        with patch.object(
+            self.runtime.judge,
+            "route_task",
+            AsyncMock(side_effect=TimeoutError("provider timeout")),
+        ):
+            result = self.send("That one")
+        self.assertEqual(result["stop_reason"], "provider_or_validation_failure")
+        self.assertIsNone(result["review_case"])
+        self.assertEqual(len(self.model.calls), before)
+        with Session(self.engine) as db:
+            self.assertEqual(
+                require_row(db, LlmRun, UUID(result["run_id"])).status, "failed"
+            )
+            for response in (first, second):
+                self.assertEqual(
+                    require_row(
+                        db, SupportTask, UUID(response["task"]["task_id"])
+                    ).checkpoint["status"],
+                    "awaiting_approval",
+                )
+
+    def test_topic_switch_keeps_both_tasks_and_returns_to_older_one(self):
+        first = self.propose()
+        second = self.propose(
+            "change_address",
+            address=Address(
+                line1="200 Demo Road",
+                city="Exampleville",
+                postal_code="12345",
+                country="US",
+            ),
+        )
+        self.assertEqual(second["task"]["kind"], "change_address")
+        self.assertNotEqual(first["task"]["task_id"], second["task"]["task_id"])
+        assert isinstance(self.runtime.judge, FakeJudge)
+        self.runtime.judge.route_decision = TaskRoute(
+            route="resume", task_id=first["task"]["task_id"], probability=0.95
+        )
+        before = len(self.model.calls)
+        resumed = self.send("Back to my earlier request")
+        self.assertEqual(resumed["task"]["task_id"], first["task"]["task_id"])
+        self.assertEqual(resumed["stop_reason"], "explicit_confirmation_required")
+        self.assertEqual(len(self.model.calls), before)
+        with Session(self.engine) as db:
+            self.assertEqual(
+                require_row(
+                    db, SupportTask, UUID(second["task"]["task_id"])
+                ).checkpoint["status"],
+                "awaiting_approval",
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(SupportProposal)), 2
+            )
+
+    def test_ambiguous_reply_preserves_both_pending_tasks(self):
+        first = self.propose()
+        self.propose(
+            "change_address",
+            address=Address(
+                line1="200 Demo Road",
+                city="Exampleville",
+                postal_code="12345",
+                country="US",
+            ),
+        )
+        before = len(self.model.calls)
+        result = self.send("That one")
+        self.assertEqual(result["stop_reason"], "task_reference_ambiguous")
+        self.assertIsNone(result["task"])
+        self.assertEqual(len(self.model.calls), before)
+        with Session(self.engine) as db:
+            self.assertEqual(
+                require_row(db, SupportTask, UUID(first["task"]["task_id"])).checkpoint[
+                    "status"
+                ],
+                "awaiting_approval",
+            )
+
+    def test_correction_discards_old_target_and_rechecks_new_one(self):
+        self.runtime.judge = FakeJudge()
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        first = self.send("Can I cancel my camera order?")
+        self.runtime.judge.route_decision = TaskRoute(
+            route="correct", task_id=first["task"]["task_id"], probability=0.95
+        )
+        self.model.script = [
+            tool("order_detail", order_id="order-1002"),
+            answer("The lens order has a shipping label created."),
+        ]
+        corrected = self.send("Actually, I meant order-1002")
+        self.assertEqual(corrected["task"]["task_id"], first["task"]["task_id"])
+        self.assertEqual(corrected["task"]["selected_order_ids"], ["order-1002"])
+        self.assertEqual(self.model.calls[-2]["references"]["owned_order_ids"], [])
+
+    def test_abandonment_requires_card_rejection_when_approval_is_pending(self):
+        first = self.propose()
+        before = len(self.model.calls)
+        result = self.send("Never mind")
+        self.assertEqual(result["stop_reason"], "explicit_rejection_required")
+        self.assertEqual(result["task"]["status"], "awaiting_approval")
+        self.assertEqual(len(self.model.calls), before)
+        self.assertEqual(
+            self.decide(first, "reject").json()["disposition"], "action_rejected"
+        )
+
+    def test_clarification_can_be_abandoned_without_creating_a_case(self):
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+        self.model.script = [
+            ModelTurn(
+                decision="Need target",
+                clarification="Which item would you like to cancel?",
+            )
+        ]
+        first = self.send("Cancel an order")
+        result = self.send("Never mind")
+        self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+        self.assertEqual(result["task"]["status"], "abandoned")
+        self.assertIsNone(result["review_case"])
+        self.assertIsNone(result["pending_action"])
+
     def test_resumed_task_refreshes_target_without_model_discovery_turn(self):
         self.runtime.judge = FakeJudge()
         self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
@@ -193,8 +326,10 @@ class ActionTests(test_workflow.ApiTests):
             )
         other = self.repo.create_conversation(UUID(self.token))
         run, _, _ = self.repo.begin(UUID(self.token), other)
-        checkpoint, resumed = self.repo.task_for_message(
-            UUID(self.token), other, run, "Yes"
+        from backend.customer_support.contracts import TaskRoute
+
+        checkpoint, resumed = self.repo.apply_task_route(
+            UUID(self.token), other, run, "Yes", TaskRoute(route="new")
         )
         self.assertIsNone(checkpoint)
         self.assertFalse(resumed)
@@ -393,6 +528,8 @@ class ActionTests(test_workflow.ApiTests):
         self.model.script = [tool("order_detail", order_id="order-1005"), proposal]
         result = self.send(statement)
         case = result["review_case"]
+        self.assertEqual(result["task"]["kind"], "human_review")
+        self.assertEqual(result["task"]["case_ids"], [case["case_id"]])
         self.assertEqual(case["status"], "pending_review")
         self.assertEqual(case["category"], "refund_review")
         self.assertEqual(case["human_decision"], "not_decided")
@@ -405,6 +542,7 @@ class ActionTests(test_workflow.ApiTests):
         ]
         followup = self.send("What is the status of that case?")
         self.assertEqual(followup["disposition"], "answered")
+        self.assertEqual(followup["task"]["task_id"], result["task"]["task_id"])
         self.assertIn(case["case_id"], self.model.calls[-2]["case_ids"])
 
     def test_human_handoff_and_case_scope(self):
@@ -444,7 +582,7 @@ class ActionTests(test_workflow.ApiTests):
     def test_yes_does_not_execute(self):
         self.propose()
         self.model.script = []
-        followup = self.send("yes")
+        followup = self.send("Do it for me")
         self.assertEqual(followup["stop_reason"], "explicit_confirmation_required")
         self.assertEqual(
             require_order(

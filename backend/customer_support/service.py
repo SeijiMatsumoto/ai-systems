@@ -594,6 +594,22 @@ async def run_support(
                     arguments=call.arguments,
                     passed=False,
                 )
+                if (
+                    operations_enabled
+                    and judgment.intent == Intent.ACTION
+                    and any(item.kind == "order" for item in catalog.values())
+                    and not any(item.kind == "policy" for item in catalog.values())
+                ):
+                    state["tools"] = {"policy_search": {"query": "bounded text"}}
+                    state["required_evidence"] = (
+                        "Retrieve applicable policy before proposing an operation; reuse the current order observation."
+                    )
+                    step(
+                        "evidence_completion_check",
+                        missing="policy",
+                        route="policy_search",
+                    )
+                    continue
                 state["final_decision_only"] = True
                 state["tools"] = {}
                 step("source_selection_closed", reason="repeated_tool_call")
@@ -719,6 +735,17 @@ async def run_support(
                 state["observations"].append(
                     {"tool": call.model_dump(mode="json"), "results": observations}
                 )
+                if call.name == "order_list":
+                    # The list contains complete current snapshots, not summaries.
+                    # A detail read cannot add facts for any of these owned orders.
+                    state["tools"].pop("order_list", None)
+                    state["tools"].pop("order_detail", None)
+                    step(
+                        "completed_read_check",
+                        source="owned_order_snapshots",
+                        removed_tools=["order_list", "order_detail"],
+                        reason="complete_snapshots_already_available",
+                    )
                 # A repeated result adds no evidence, even if the query was reworded.
                 previous_sources = {
                     (
@@ -746,7 +773,8 @@ async def run_support(
                     or call.name in {"compatibility", "case_detail"}
                     or tool_count >= MAX_TOOL_CALLS
                     or (
-                        call.name == "order_detail"
+                        call.name in {"order_detail", "order_list", "policy_search"}
+                        and any(item.kind == "order" for item in catalog.values())
                         and any(item.kind == "policy" for item in catalog.values())
                     )
                 ):

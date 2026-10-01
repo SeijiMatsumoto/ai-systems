@@ -344,6 +344,40 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result.review_case)
             self.assertTrue(any(s.stage == "intent_route_check" for s in result.steps))
 
+    async def test_order_and_policy_reads_go_directly_to_final_answer(self):
+        for reads in (
+            [tool("order_list"), tool("policy_search", query="cancellation")],
+            [tool("policy_search", query="cancellation"), tool("order_list")],
+        ):
+
+            def final(state):
+                self.assertTrue(state["final_decision_only"])
+                self.assertEqual(state["tools"], {})
+                observations = [
+                    item for entry in state["observations"] for item in entry["results"]
+                ]
+                ids = tuple(
+                    item["evidence_id"]
+                    for item in observations
+                    if item.get("source_id") in {"order-1001", "cancellation"}
+                )
+                return answer(
+                    "The R50 order is paid and unfulfilled; cancellation requires confirmation.",
+                    ids,
+                )
+
+            model = ScriptModel([*reads, final])
+            result = await self.run_case(
+                model, question="Can I cancel my unshipped camera order?"
+            )
+            self.assertEqual(result.disposition, "answered")
+            self.assertEqual(len(model.calls), 3)
+            requests = [
+                s.details["name"] for s in result.steps if s.stage == "tool_request"
+            ]
+            self.assertEqual(set(requests), {"order_list", "policy_search"})
+            self.assertEqual(len(requests), 2)
+
     async def test_precheck_rejects_before_judge(self):
         judge = FakeJudge()
         result = await self.run_case(ScriptModel([]), judge, question="???")

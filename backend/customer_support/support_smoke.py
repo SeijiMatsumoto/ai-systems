@@ -45,7 +45,9 @@ QUERIES = (
         "Cancel the Canon EOS R50 order I placed on September 30.",
         {"awaiting_confirmation"},
     ),
+    ("cancel_followup", "Yes, cancel please", {"awaiting_confirmation"}),
     ("delivery", "Where is my 55–210mm lens?", {"answered"}),
+    ("delivery_followup", "Has it shipped yet?", {"answered"}),
     ("policy", "What is your return policy?", {"answered"}),
     (
         "compatibility",
@@ -77,6 +79,16 @@ def main():
     args = parser.parse_args()
     if not args.live:
         parser.error("--live is required; this command calls paid providers")
+    selected = [q for q in QUERIES if not args.only or q[0] in args.only][: args.limit]
+    prerequisites = {
+        "cancel_followup": "eligibility",
+        "delivery_followup": "delivery",
+        "ticket_followup": "refund",
+    }
+    names = [q[0] for q in selected]
+    for followup, prerequisite in prerequisites.items():
+        if followup in names and prerequisite not in names:
+            parser.error(f"{followup} requires {prerequisite} in the same invocation")
 
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -132,12 +144,15 @@ def main():
         login.raise_for_status()
         headers = {"Authorization": "Bearer " + login.json()["token"]}
         chat = None
-        selected = [q for q in QUERIES if not args.only or q[0] in args.only]
-        for name, query, expected in selected[: args.limit]:
-            if name != "ticket_followup":
+        chats = {}
+        for name, query, expected in selected:
+            if name in prerequisites:
+                chat = chats[prerequisites[name]]
+            else:
                 created = client.post(base + "/conversations", headers=headers)
                 created.raise_for_status()
                 chat = created.json()["conversation_id"]
+            chats[name] = chat
             started = time.monotonic()
             response = client.post(
                 base + f"/conversations/{chat}/messages/stream",
@@ -154,7 +169,21 @@ def main():
             passed = (
                 result.get("disposition") in expected
                 and result.get("stop_reason") != "provider_or_validation_failure"
+                and result.get("receipt") is None
+                and any(e["type"] == "started" for e in events)
             )
+            if name in {"cancel", "cancel_followup", "address"}:
+                passed = (
+                    passed
+                    and (result.get("pending_action") or {}).get("order_id")
+                    == "order-1001"
+                )
+            if name == "refund":
+                passed = (
+                    passed
+                    and (result.get("review_case") or {}).get("order_id")
+                    == "order-1004"
+                )
             record = {
                 "name": name,
                 "query": query,

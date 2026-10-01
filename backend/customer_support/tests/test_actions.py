@@ -50,6 +50,49 @@ def require_row(db: Session, model: type[Row], key: object) -> Row:
 
 
 class ActionTests(test_workflow.ApiTests):
+    def test_followup_cancellation_reuses_target_and_completes_policy_evidence(self):
+        self.runtime.judge = FakeJudge()
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            test_workflow.answer("Your Canon EOS R50 order is paid and unfulfilled."),
+        ]
+        self.send("Can I cancel my unshipped camera order?")
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+
+        def proposal(state):
+            self.assertEqual(state["references"]["owned_order_ids"], ["order-1001"])
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            return ModelTurn(
+                decision="Propose cancellation",
+                proposal=CancelProposal(
+                    kind="cancel_order",
+                    order_id="order-1001",
+                    evidence_ids=tuple(item["evidence_id"] for item in evidence),
+                ),
+            )
+
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            tool("order_detail", order_id="order-1001"),
+            tool("policy_search", query="cancellation"),
+            proposal,
+        ]
+        response = self.send("Yes, cancel please")
+        self.assertEqual(response["disposition"], "awaiting_confirmation")
+        self.assertIsNotNone(response["pending_action"])
+        self.assertIsNone(response["receipt"])
+        requests = [
+            s["details"]["name"]
+            for s in response["steps"]
+            if s["stage"] == "tool_request"
+        ]
+        self.assertEqual(requests, ["order_detail", "policy_search"])
+
     # Reuse the isolated API setup while retaining its read-only regressions.
     def send(self, message):
         response = self.client.post(

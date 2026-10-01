@@ -1,6 +1,6 @@
 const stages = [
   {
-    label: '01 · Ingest and index · implemented',
+    label: '01 · Ingest and index',
     nodes: [
       ['Synthetic sources', 'Policies · documents · support tickets'],
       ['Parse + chunk', 'Versioned text · exact source offsets'],
@@ -9,7 +9,7 @@ const stages = [
     ],
   },
   {
-    label: '02 · Check request and classify intent · implemented',
+    label: '02 · Check request and classify intent',
     nodes: [
       ['Deterministic checks', 'Validate · normalize · bound input'],
       ['Action signals', 'Keyword patterns before model calls'],
@@ -18,7 +18,7 @@ const stages = [
     ],
   },
   {
-    label: '03 · Retrieve authorized evidence · implemented',
+    label: '03 · Retrieve authorized evidence',
     nodes: [
       ['Resolve access', 'Server-owned persona groups'],
       ['Lexical search', 'BM25-style term scoring'],
@@ -45,7 +45,7 @@ export default function KnowledgeSystemDiagram() {
     </section>)}
 
     <section className="knowledge-architecture-stage">
-      <h3>04 · Answer path · implemented</h3>
+      <h3>04 · Answer path</h3>
       <div className="knowledge-architecture-split">
         <div><strong>Selected passages → typed answer claims</strong><small>The answer model receives only the current question, bounded conversation context, and ACL-authorized excerpts. Prior answers help resolve follow-ups but are not evidence.</small></div>
         <div><strong>Deterministic citation checks → Jev grounding → saved answer</strong><small>Application code verifies evidence IDs and exact locators first. Jev then checks claim support; unsupported or unverified answers abstain. The answer and ordered workflow are saved to the shared run history.</small></div>
@@ -53,7 +53,7 @@ export default function KnowledgeSystemDiagram() {
     </section>
 
     <section className="knowledge-architecture-stage">
-      <h3>05 · Action path · implemented</h3>
+      <h3>05 · Action path</h3>
       <div className="knowledge-architecture-split">
         <div><strong>Positive intent → authorized ticket evidence → typed proposal</strong><small>Only the supported follow-up action is available. The proposal model receives authorized support-ticket passages and cannot execute a task.</small></div>
         <div><strong>Simulated approval → policy recheck → idempotent mock task</strong><small>Application policy checks the approver, requester scope, action type, and evidence again at execution. Writes stay in the local demo database; no external task system is called.</small></div>

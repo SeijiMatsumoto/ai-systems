@@ -38,7 +38,7 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
       <div className="architecture-modal-frame">
         <header className="architecture-modal-header">
           <div>
-            <span className="section-kicker">System architecture · {availability === 'ready' ? 'Runnable demo' : 'Proposed design'}</span>
+            <span className="section-kicker">{systemId === 'knowledge-action' ? 'System architecture' : `System architecture · ${availability === 'ready' ? 'Runnable demo' : 'Proposed design'}`}</span>
             <h2 id="architecture-modal-title">{title}</h2>
           </div>
           <button className="architecture-modal-close" type="button" onClick={() => dialogRef.current?.close()} autoFocus aria-label="Close architecture diagram">×</button>

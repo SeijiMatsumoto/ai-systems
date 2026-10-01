@@ -13,7 +13,7 @@ from backend.db.schemas import (
     SupportOutput,
 )
 
-from .contracts import ConversationTurn, SupportResponse
+from .contracts import ConversationTurn, SupportResponse, SupportStep
 from .store import MockStore
 
 
@@ -29,6 +29,9 @@ class SupportRepository:
         store.sign_in(customer_id)
         token = uuid4()
         with self.session_factory() as db:
+            from .actions import seed_orders
+
+            seed_orders(db, store)
             db.add(SupportDemoSession(id=token, customer_id=customer_id))
         return token
 
@@ -107,27 +110,27 @@ class SupportRepository:
                     .limit(4)
                 )
             )
-            context = [
-                ConversationTurn(
-                    question=row.question,
-                    answer=SupportResponse.model_validate(row.response_payload).answer,
-                    order_ids=tuple(
-                        e.source_id
-                        for e in SupportResponse.model_validate(
-                            row.response_payload
-                        ).evidence
-                        if e.kind == "order"
-                    ),
-                    product_ids=tuple(
-                        e.source_id
-                        for e in SupportResponse.model_validate(
-                            row.response_payload
-                        ).evidence
-                        if e.kind == "catalog"
-                    ),
+            context = []
+            for row in reversed(rows):
+                saved = SupportResponse.model_validate(row.response_payload)
+                context.append(
+                    ConversationTurn(
+                        question=row.question,
+                        answer=saved.answer,
+                        case_ids=(saved.review_case.case_id,)
+                        if saved.review_case
+                        else (),
+                        proposal_ids=(saved.pending_action.proposal_id,)
+                        if saved.pending_action
+                        else (),
+                        order_ids=tuple(
+                            e.source_id for e in saved.evidence if e.kind == "order"
+                        ),
+                        product_ids=tuple(
+                            e.source_id for e in saved.evidence if e.kind == "catalog"
+                        ),
+                    )
                 )
-                for row in reversed(rows)
-            ]
             run = create_run(db, "customer_support")
             reservation = db.execute(
                 update(SupportConversation)
@@ -145,18 +148,125 @@ class SupportRepository:
             run_id, customer_id = run.id, identity.customer_id
         return run_id, customer_id, context
 
+    def customer_store(self, store, customer_id):
+        from .actions import PersistentCustomerStore
+
+        return PersistentCustomerStore(store, customer_id, self.session_factory)
+
+    def cases(self, token, conversation_id):
+        from backend.db.schemas import SupportCase
+
+        from .actions import case_view
+
+        with self.session_factory() as db:
+            identity, _ = self._owned(db, token, conversation_id)
+            return [
+                case_view(row)
+                for row in db.scalars(
+                    select(SupportCase).where(
+                        SupportCase.customer_id == identity.customer_id,
+                        SupportCase.conversation_id == conversation_id,
+                    )
+                )
+            ]
+
+    def case(self, token, conversation_id, case_id):
+        from backend.db.schemas import SupportCase
+
+        from .actions import case_view
+        from .contracts import RecordLookupRequest
+
+        key = RecordLookupRequest(record_id=case_id).record_id
+        if not key.startswith("case-"):
+            return None
+        try:
+            case_uuid = UUID(hex=key[5:])
+        except ValueError:
+            return None
+        with self.session_factory() as db:
+            identity, _ = self._owned(db, token, conversation_id)
+            row = db.get(SupportCase, case_uuid)
+            return (
+                case_view(row)
+                if row
+                and row.customer_id == identity.customer_id
+                and row.conversation_id == conversation_id
+                else None
+            )
+
+    def saved_result(self, token, conversation_id, run_id):
+        with self.session_factory() as db:
+            self._owned(db, token, conversation_id)
+            row = db.get(SupportOutput, run_id)
+            if row is None or row.conversation_id != conversation_id:
+                raise LookupError("Saved operation not found")
+            return SupportResponse.model_validate(row.response_payload)
+
+    def pending(self, token, conversation_id):
+        from backend.db.schemas import SupportProposal
+
+        with self.session_factory() as db:
+            identity, _ = self._owned(db, token, conversation_id)
+            return [
+                str(row.id)
+                for row in db.scalars(
+                    select(SupportProposal).where(
+                        SupportProposal.customer_id == identity.customer_id,
+                        SupportProposal.conversation_id == conversation_id,
+                        SupportProposal.state == "pending",
+                    )
+                )
+            ]
+
     def finish(
         self,
         token: UUID,
         conversation_id: UUID,
         question: str,
         response: SupportResponse,
+        store: MockStore | None = None,
     ):
         with self.session_factory() as db:
-            _, conversation = self._owned(db, token, conversation_id)
+            identity, conversation = self._owned(db, token, conversation_id)
             run_id = UUID(response.run_id)
             if conversation.active_run_id != run_id:
                 raise ValueError("Run does not own the conversation reservation")
+            from .actions import save_operation
+
+            response = (
+                save_operation(db, identity, conversation, response, store)
+                if store is not None
+                else response
+            )
+            if response.approved_operation is not None:
+                raise ValueError("Operation persistence requires the current store")
+            if response.pending_action or response.review_case:
+                prior = list(response.steps[:-1])
+                prior.append(
+                    SupportStep(
+                        sequence=len(prior) + 1,
+                        stage="operation_persistence",
+                        details={
+                            "proposal": response.pending_action.model_dump(mode="json")
+                            if response.pending_action
+                            else None,
+                            "case": response.review_case.model_dump(mode="json")
+                            if response.review_case
+                            else None,
+                        },
+                    )
+                )
+                prior.append(
+                    SupportStep(
+                        sequence=len(prior) + 1,
+                        stage="stop",
+                        details={
+                            "reason": response.stop_reason,
+                            "disposition": response.disposition,
+                        },
+                    )
+                )
+                response = response.model_copy(update={"steps": tuple(prior)})
             db.add(
                 SupportOutput(
                     run_id=run_id,
@@ -174,6 +284,8 @@ class SupportRepository:
             else:
                 complete_run(db, run_id)
             conversation.active_run_id = None
+            db.flush()
+        return response
 
     def attach_trace(
         self, token: UUID, conversation_id: UUID, run_id: UUID, trace_id: str | None
@@ -188,3 +300,10 @@ class SupportRepository:
             if run is None:
                 raise LookupError("Run not found")
             run.logfire_trace_id = trace_id
+
+    def abort(self, token, conversation_id, run_id):
+        with self.session_factory() as db:
+            _, conversation = self._owned(db, token, conversation_id)
+            if conversation.active_run_id == run_id:
+                fail_run(db, run_id)
+                conversation.active_run_id = None

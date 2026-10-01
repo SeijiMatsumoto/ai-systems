@@ -3,7 +3,7 @@
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Never
 from uuid import UUID
 
 import logfire
@@ -20,6 +20,7 @@ from backend.internal_knowledge_action.embedding import (
 from backend.observability import EXPORT_ENABLED
 
 from .contracts import (
+    ConfirmationRequest,
     DemoSignIn,
     MessageRequest,
     PolicyIndex,
@@ -74,7 +75,7 @@ def runtime():
     return Runtime(store, LiveSupportModel(), LiveJevJudge(), index, embedder)
 
 
-def error(exc):
+def error(exc) -> Never:
     if isinstance(exc, LookupError):
         raise HTTPException(404, str(exc)) from exc
     if isinstance(exc, ConversationBusy):
@@ -82,7 +83,7 @@ def error(exc):
     if isinstance(exc, SQLAlchemyError):
         raise HTTPException(
             503,
-            "Support persistence unavailable; check database setup and migration 009",
+            "Support persistence unavailable; check database setup and migrations 009 and 010",
         ) from exc
     raise HTTPException(400, str(exc)) from exc
 
@@ -154,7 +155,7 @@ async def execute(
 
     def capture(step):
         saved_steps.append(step)
-        if on_step:
+        if on_step and step.stage != "stop":
             on_step(step)
 
     with logfire.span("Customer support {run_id}", run_id=str(run_id)) as span:
@@ -171,7 +172,7 @@ async def execute(
                     conversation_id=str(conversation_id), message=request.message
                 ),
                 deps.store,
-                deps.store.sign_in(customer_id),
+                repo.customer_store(deps.store, customer_id),
                 deps.model,
                 deps.judge,
                 deps.index,
@@ -179,6 +180,9 @@ async def execute(
                 str(run_id),
                 context,
                 capture,
+                operations_enabled=True,
+                case_lookup=lambda key: repo.case(token, conversation_id, key),
+                pending_ids=repo.pending(token, conversation_id),
             )
         except BaseException:
             interrupted = SupportStep(
@@ -197,7 +201,17 @@ async def execute(
             )
             repo.finish(token, conversation_id, request.message, result)
             raise
-        repo.finish(token, conversation_id, request.message, result)
+        try:
+            result = repo.finish(
+                token, conversation_id, request.message, result, deps.store
+            )
+        except (SQLAlchemyError, RuntimeError, ValueError):
+            repo.abort(token, conversation_id, run_id)
+            raise
+        if on_step:
+            emitted = len([step for step in saved_steps if step.stage != "stop"])
+            for step in result.steps[emitted:]:
+                on_step(step)
         return result
 
 
@@ -216,7 +230,7 @@ async def message(
         return await execute(
             repo, token, conversation_id, request, run_id, customer_id, context, deps
         )
-    except (LookupError, ValueError, SQLAlchemyError) as exc:
+    except (LookupError, ValueError, TypeError, SQLAlchemyError) as exc:
         error(exc)
 
 
@@ -230,7 +244,7 @@ async def stream(
 ):
     try:
         run_id, customer_id, context = repo.begin(token, conversation_id)
-    except (LookupError, ValueError, SQLAlchemyError) as exc:
+    except (LookupError, ValueError, TypeError, SQLAlchemyError) as exc:
         error(exc)
     queue = asyncio.Queue()
 
@@ -288,3 +302,69 @@ async def stream(
     return StreamingResponse(
         events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
     )
+
+
+@router.post(
+    "/conversations/{conversation_id}/proposals/{proposal_id}/decision",
+    response_model=SupportResponse,
+)
+def decide(
+    conversation_id: UUID,
+    proposal_id: UUID,
+    request: ConfirmationRequest,
+    token: Annotated[UUID, Depends(session_token)],
+    repo: Annotated[SupportRepository, Depends(repository)],
+):
+    from .actions import confirm
+
+    try:
+        return confirm(
+            repo, token, conversation_id, proposal_id, request, MockStore.load()
+        )
+    except (LookupError, ValueError, TypeError, SQLAlchemyError) as exc:
+        error(exc)
+
+
+@router.get("/conversations/{conversation_id}/cases")
+def cases(
+    conversation_id: UUID,
+    token: Annotated[UUID, Depends(session_token)],
+    repo: Annotated[SupportRepository, Depends(repository)],
+):
+    try:
+        return repo.cases(token, conversation_id)
+    except (LookupError, SQLAlchemyError) as exc:
+        error(exc)
+
+
+@router.get("/conversations/{conversation_id}/cases/{case_id}")
+def case_detail(
+    conversation_id: UUID,
+    case_id: str,
+    token: Annotated[UUID, Depends(session_token)],
+    repo: Annotated[SupportRepository, Depends(repository)],
+):
+    try:
+        case = repo.case(token, conversation_id, case_id)
+        if case is None:
+            raise LookupError("Case not found")
+        return case
+    except (LookupError, ValueError, TypeError, SQLAlchemyError) as exc:
+        error(exc)
+
+
+@router.post(
+    "/conversations/{conversation_id}/runs/{run_id}/replay",
+    response_model=SupportResponse,
+)
+def replay_operation(
+    conversation_id: UUID,
+    run_id: UUID,
+    token: Annotated[UUID, Depends(session_token)],
+    repo: Annotated[SupportRepository, Depends(repository)],
+):
+    """Retry a known server-issued operation by returning its committed result."""
+    try:
+        return repo.saved_result(token, conversation_id, run_id)
+    except (LookupError, SQLAlchemyError) as exc:
+        error(exc)

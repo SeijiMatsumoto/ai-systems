@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -15,6 +16,7 @@ from backend.customer_support.contracts import (
     SupportRequest,
 )
 from backend.customer_support.store import DEFAULT_FIXTURE, FixtureError, MockStore
+from backend.customer_support.tests.test_workflow import require_order
 
 
 class StoreTests(unittest.TestCase):
@@ -32,8 +34,12 @@ class StoreTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 SupportRequest(conversation_id="chat-1", message=message)
         with self.assertRaises(ValidationError):
-            SupportRequest(
-                conversation_id="chat-1", message="hello", customer_id="customer-sam"
+            SupportRequest.model_validate(
+                {
+                    "conversation_id": "chat-1",
+                    "message": "hello",
+                    "customer_id": "customer-sam",
+                }
             )
 
     def test_customer_order_isolation(self):
@@ -49,7 +55,11 @@ class StoreTests(unittest.TestCase):
             self.store.sign_in("customer-sam").order("order-2001").status, "found"
         )
         with self.assertRaises(TypeError):
-            self.alex.order("order-2001", customer_id="customer-sam")
+            arguments: dict[str, Any] = {
+                "order_id": "order-2001",
+                "customer_id": "customer-sam",
+            }
+            self.alex.order(**arguments)
 
     def test_unknown_identity_rejected(self):
         with self.assertRaises(ValueError):
@@ -57,23 +67,18 @@ class StoreTests(unittest.TestCase):
 
     def test_order_states(self):
         self.assertEqual(
-            [self.alex.order(f"order-100{i}").order.fulfillment for i in range(1, 5)],
+            [
+                require_order(self.alex, f"order-100{i}").fulfillment
+                for i in range(1, 5)
+            ],
             ["unfulfilled", "label_created", "shipped", "delivered"],
         )
-        self.assertEqual(
-            (
-                self.store.fixture.scenario_date
-                - self.alex.order("order-1004").order.delivered_on
-            ).days,
-            16,
-        )
-        self.assertGreater(
-            (
-                self.store.fixture.scenario_date
-                - self.alex.order("order-1005").order.delivered_on
-            ).days,
-            30,
-        )
+        recent = require_order(self.alex, "order-1004").delivered_on
+        assert recent is not None
+        self.assertEqual((self.store.fixture.scenario_date - recent).days, 16)
+        older = require_order(self.alex, "order-1005").delivered_on
+        assert older is not None
+        self.assertGreater((self.store.fixture.scenario_date - older).days, 30)
 
     def test_policy_and_account_are_distinct(self):
         self.assertEqual(self.store.policies("order-1001"), ())
@@ -161,7 +166,7 @@ class StoreTests(unittest.TestCase):
 
     def test_immutable_observations(self):
         with self.assertRaises(ValidationError):
-            self.alex.order("order-1001").order.customer_id = "customer-sam"
+            require_order(self.alex, "order-1001").customer_id = "customer-sam"
 
     def test_lookup_payload_consistency(self):
         with self.assertRaises(ValidationError):

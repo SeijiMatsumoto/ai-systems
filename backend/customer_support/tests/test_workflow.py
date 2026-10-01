@@ -47,9 +47,13 @@ from backend.customer_support.store import CustomerStore, MockStore
 from backend.db.schemas import (
     Base,
     LlmRun,
+    SupportCase,
     SupportConversation,
     SupportDemoSession,
+    SupportOrder,
     SupportOutput,
+    SupportProposal,
+    SupportReceipt,
 )
 from backend.internal_knowledge_action.embedding import MockEmbeddingProvider
 
@@ -490,6 +494,10 @@ class ApiTests(unittest.TestCase):
                     SupportDemoSession,
                     SupportConversation,
                     SupportOutput,
+                    SupportOrder,
+                    SupportProposal,
+                    SupportReceipt,
+                    SupportCase,
                 )
             ],
         )

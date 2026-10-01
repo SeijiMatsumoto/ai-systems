@@ -267,7 +267,7 @@ class IntentJudgment(Record):
 
 class Evidence(Record):
     evidence_id: Identifier
-    kind: Literal["policy", "order", "catalog", "compatibility"]
+    kind: Literal["policy", "order", "catalog", "compatibility", "case"]
     source_id: Text
     locator: Text
     text: Annotated[str, Field(min_length=1, max_length=6000)]
@@ -291,27 +291,116 @@ class ToolCall(Record):
         "catalog_list",
         "product_detail",
         "compatibility",
+        "case_detail",
     ]
     arguments: dict = Field(default_factory=dict)
+
+
+class ActionKind(StrEnum):
+    CANCEL_ORDER = "cancel_order"
+    CHANGE_ADDRESS = "change_address"
+
+
+class CaseCategory(StrEnum):
+    REFUND = "refund_review"
+    RETURN = "return_review"
+    WARRANTY = "warranty_review"
+    DAMAGE = "damage_review"
+    GENERAL = "general_support"
+
+
+class CancelProposal(Record):
+    kind: Literal["cancel_order"]
+    order_id: Identifier
+    evidence_ids: tuple[Identifier, ...] = Field(min_length=1, max_length=6)
+
+
+class AddressProposal(Record):
+    kind: Literal["change_address"]
+    order_id: Identifier
+    address: Address
+    evidence_ids: tuple[Identifier, ...] = Field(min_length=1, max_length=6)
+
+
+class CaseRequest(Record):
+    kind: Literal["create_case"]
+    category: CaseCategory
+    order_id: Identifier | None = None
+    customer_statement: Annotated[str, Field(min_length=1, max_length=1000)]
+    evidence_ids: tuple[Identifier, ...] = Field(default=(), max_length=6)
+
+    @model_validator(mode="after")
+    def order_required(self):
+        if self.category != CaseCategory.GENERAL and self.order_id is None:
+            raise ValueError("Order-specific review requires an owned order")
+        return self
+
+
+OperationProposal = Annotated[
+    CancelProposal | AddressProposal | CaseRequest, Field(discriminator="kind")
+]
+
+
+class ConfirmationRequest(Record):
+    decision: Literal["confirm", "reject"]
+
+
+class PendingAction(Record):
+    proposal_id: Identifier
+    kind: ActionKind
+    order_id: Identifier
+    address: Address | None = None
+    state: Literal["pending", "confirmed", "rejected", "blocked"]
+    expected_order_version: int = Field(ge=1)
+
+
+class ReviewCase(Record):
+    case_id: Identifier
+    category: CaseCategory
+    order_id: Identifier | None
+    customer_statement: Text
+    status: Literal["pending_review"] = "pending_review"
+    human_decision: Literal["not_decided"] = "not_decided"
+    customer_statement_is_verified: Literal[False] = False
+
+
+class ActionReceipt(Record):
+    receipt_id: Identifier
+    proposal_id: Identifier
+    kind: ActionKind
+    order_id: Identifier
+    outcome: Literal["executed", "rejected", "blocked"]
+    reason: Identifier
+    order_version: int = Field(ge=1)
+    refund_executed: Literal[False] = False
+    case_id: Identifier | None = None
 
 
 class ModelTurn(Record):
     decision: Annotated[str, Field(min_length=1, max_length=500)]
     tool: ToolCall | None = None
     answer: AnswerDraft | None = None
+    proposal: OperationProposal | None = None
     clarification: Annotated[str, Field(min_length=1, max_length=500)] | None = None
 
     @model_validator(mode="after")
     def one_output(self):
         if (
-            sum(x is not None for x in (self.tool, self.answer, self.clarification))
+            sum(
+                x is not None
+                for x in (self.tool, self.answer, self.clarification, self.proposal)
+            )
             != 1
         ):
-            raise ValueError("Choose exactly one tool, answer, or clarification")
+            raise ValueError(
+                "Choose exactly one tool, answer, clarification, or proposal"
+            )
         return self
 
 
 class ConversationTurn(Record):
+    case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
+    proposal_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     order_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     product_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     question: Text
@@ -327,9 +416,22 @@ class SupportStep(Record):
 class SupportResponse(Record):
     run_id: Identifier
     conversation_id: Identifier
-    disposition: Literal["answered", "clarification", "handoff_needed"]
+    disposition: Literal[
+        "answered",
+        "clarification",
+        "handoff_needed",
+        "awaiting_confirmation",
+        "case_created",
+        "action_completed",
+        "action_blocked",
+        "action_rejected",
+    ]
     answer: Annotated[str, Field(max_length=6500)]
     stop_reason: Identifier
+    approved_operation: OperationProposal | None = Field(default=None, exclude=True)
+    pending_action: PendingAction | None = None
+    review_case: ReviewCase | None = None
+    receipt: ActionReceipt | None = None
     evidence: tuple[Evidence, ...] = ()
     steps: tuple[SupportStep, ...] = ()
     usage: dict[str, dict[str, Any]] = Field(default_factory=dict)

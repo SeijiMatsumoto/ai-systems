@@ -11,7 +11,11 @@ from pydantic import ValidationError
 from backend.internal_knowledge_action.embedding import EmbeddingProvider
 
 from .contracts import (
+    AddressProposal,
     AnswerDraft,
+    CancelProposal,
+    CaseCategory,
+    CaseRequest,
     CompatibilityRequest,
     ConversationTurn,
     EmptyArgs,
@@ -20,6 +24,7 @@ from .contracts import (
     OrderArgs,
     PolicySearchArgs,
     ProductArgs,
+    RecordLookupRequest,
     SupportRequest,
     SupportResponse,
     SupportStep,
@@ -109,6 +114,9 @@ async def run_support(
     run_id: str,
     history: list[ConversationTurn] | None = None,
     on_step: Callable[[SupportStep], None] | None = None,
+    operations_enabled: bool = False,
+    case_lookup=None,
+    pending_ids: list[str] | None = None,
 ) -> SupportResponse:
     steps, catalog, usage = [], {}, {}
     tool_count = 0
@@ -132,7 +140,24 @@ async def run_support(
         if on_step:
             on_step(item)
 
-    def finish(disposition, answer, reason, evidence_ids=()):
+    def finish(disposition, answer, reason, evidence_ids=(), operation=None):
+        if (
+            operations_enabled
+            and disposition == "handoff_needed"
+            and operation is None
+            and re.search(r"[a-zA-Z0-9]", request.message)
+        ):
+            operation = CaseRequest(
+                kind="create_case",
+                category=CaseCategory.GENERAL,
+                customer_statement=request.message[:1000],
+            )
+            step(
+                "escalation_case_check",
+                reason=reason,
+                scope="owned conversation",
+                customer_statement_is_verified=False,
+            )
         step(
             "stop",
             disposition=disposition,
@@ -145,6 +170,7 @@ async def run_support(
             disposition=disposition,
             answer=answer,
             stop_reason=reason,
+            approved_operation=operation,
             evidence=tuple(catalog[key] for key in dict.fromkeys(evidence_ids)),
             steps=tuple(steps),
             usage=usage,
@@ -187,6 +213,19 @@ async def run_support(
                 "Please ask a shorter question with fewer details.",
                 "context_limit",
             )
+        if (
+            operations_enabled
+            and pending_ids
+            and re.fullmatch(
+                r"(yes|ok|okay|confirm|go ahead)[.! ]*", state["message"], re.IGNORECASE
+            )
+        ):
+            step("confirmation_route_check", pending_proposal_ids=pending_ids)
+            return finish(
+                "clarification",
+                "Please confirm or reject the specific pending proposal using its confirmation action.",
+                "explicit_confirmation_required",
+            )
         step("intent_input", state=state, model=judge.model_id)
         judgment = await bounded(judge.classify(state), 15)
         usage["intent"] = judgment.usage
@@ -201,7 +240,26 @@ async def run_support(
                 "Could you clarify what you need help with?",
                 "intent_uncertain",
             )
-        if judgment.intent != Intent.INFORMATION:
+        state["pending_proposal_ids"] = pending_ids or []
+        state["case_ids"] = list(
+            dict.fromkeys(key for turn in (history or []) for key in turn.case_ids)
+        )
+        if operations_enabled and judgment.intent in {Intent.HUMAN, Intent.UNSUPPORTED}:
+            operation = CaseRequest(
+                kind="create_case",
+                category=CaseCategory.GENERAL,
+                customer_statement=state["message"][:1000],
+            )
+            step(
+                "case_request_check", category="general_support", application_owned=True
+            )
+            return finish(
+                "handoff_needed",
+                "Saving your request for human review.",
+                "case_request_validated",
+                operation=operation,
+            )
+        if not operations_enabled and judgment.intent != Intent.INFORMATION:
             return finish(
                 "handoff_needed",
                 "This request needs human support review. No action has been performed and no case has been created yet.",
@@ -215,6 +273,12 @@ async def run_support(
             "product_detail": {"product_id": "catalog ID"},
             "compatibility": {"body_id": "catalog ID", "lens_id": "catalog ID"},
         }
+        if operations_enabled:
+            state["tools"]["case_detail"] = {
+                "record_id": "case ID from this conversation"
+            }
+        state["operation_proposals_enabled"] = operations_enabled
+        state["intent"] = judgment.intent.value
         state["observations"] = []
         for turn in range(MAX_TURNS):
             tokens = sum(
@@ -239,6 +303,117 @@ async def run_support(
             output, counts = await bounded(model.turn(state, run_id), 40)
             usage[f"model_{turn + 1}"] = counts
             step("model_output", output=output.model_dump(mode="json"), usage=counts)
+            if output.proposal is not None:
+                operation = output.proposal
+                problem = None
+                source_text = " ".join(
+                    [state["message"], *[t.question for t in (history or [])[-4:]]]
+                ).lower()
+                if not operations_enabled or judgment.intent != Intent.ACTION:
+                    problem = "action_not_requested"
+                elif any(key not in catalog for key in operation.evidence_ids):
+                    problem = "unknown_operation_citation"
+                elif (
+                    operation.order_id
+                    and customer.order(operation.order_id).order is None
+                ):
+                    problem = "order_not_found"
+                elif operation.order_id and not any(
+                    catalog[key].kind == "order"
+                    and catalog[key].source_id == operation.order_id
+                    for key in operation.evidence_ids
+                ):
+                    problem = "missing_order_evidence"
+                elif isinstance(
+                    operation, (CancelProposal, AddressProposal)
+                ) and not any(
+                    catalog[key].kind == "policy" for key in operation.evidence_ids
+                ):
+                    problem = "missing_policy_evidence"
+                elif (
+                    isinstance(operation, CaseRequest)
+                    and operation.customer_statement.lower() not in source_text
+                ):
+                    problem = "invented_customer_statement"
+                elif isinstance(operation, AddressProposal) and any(
+                    value.lower() not in source_text
+                    for value in (
+                        operation.address.line1,
+                        operation.address.city,
+                        operation.address.postal_code,
+                    )
+                ):
+                    problem = "invented_address"
+                step(
+                    "proposal_check",
+                    passed=problem is None,
+                    reason=problem,
+                    proposal=operation.model_dump(mode="json"),
+                )
+                if problem:
+                    return finish(
+                        "clarification",
+                        "Please provide the owned order and the complete details of the request.",
+                        problem,
+                    )
+                if isinstance(operation, (CancelProposal, AddressProposal)):
+                    current_order = customer.order(operation.order_id).order
+                    assert current_order is not None
+                    current_review = review_order(current_order, store)
+                    step(
+                        "proposal_state_check",
+                        order_id=operation.order_id,
+                        result=current_review.model_dump(mode="json"),
+                        rules=store.fixture.rules.model_dump(mode="json"),
+                        execution_authorized=False,
+                    )
+                ground_state = {
+                    "proposal": operation.model_dump(mode="json"),
+                    "user_request": state["message"],
+                    "recent_questions": [t.question for t in (history or [])[-4:]],
+                    "verified_observations": [
+                        catalog[key].model_dump(mode="json")
+                        for key in operation.evidence_ids
+                    ],
+                    "customer_statement_is_unverified": True,
+                }
+                tokens = sum(
+                    int(v.get("input_tokens", 0)) + int(v.get("output_tokens", 0))
+                    for v in usage.values()
+                )
+                if (
+                    len(json.dumps(ground_state)) > MAX_CONTEXT_CHARS
+                    or tokens >= MAX_TOKENS
+                ):
+                    return finish(
+                        "handoff_needed",
+                        "The proposal needs further review.",
+                        "proposal_budget",
+                    )
+                step(
+                    "proposal_grounding_input", state=ground_state, model=judge.model_id
+                )
+                grounding = await bounded(judge.ground(ground_state), 15)
+                usage["proposal_grounding"] = grounding.usage
+                step(
+                    "proposal_grounding_check",
+                    judgment=grounding.model_dump(mode="json"),
+                    passed=grounding.probability >= THRESHOLD,
+                    threshold=THRESHOLD,
+                )
+                if grounding.probability < THRESHOLD:
+                    return finish(
+                        "clarification",
+                        "Could you clarify the order and what you want us to do?",
+                        "proposal_grounding_rejected",
+                    )
+                return finish(
+                    "handoff_needed",
+                    "The checked proposal is ready to save.",
+                    "proposal_validated",
+                    operation.evidence_ids,
+                    operation,
+                )
             if output.clarification:
                 safe = (
                     output.clarification.endswith("?")
@@ -439,6 +614,23 @@ async def run_support(
                             product.model_dump_json(),
                         )
                         if product
+                        else {"status": "not_found"}
+                    )
+                elif call.name == "case_detail":
+                    args = RecordLookupRequest.model_validate(call.arguments)
+                    case = (
+                        case_lookup(args.record_id)
+                        if operations_enabled and case_lookup
+                        else None
+                    )
+                    observations.append(
+                        add(
+                            "case",
+                            args.record_id,
+                            "saved_pending_review",
+                            case.model_dump_json(),
+                        )
+                        if case
                         else {"status": "not_found"}
                     )
                 else:

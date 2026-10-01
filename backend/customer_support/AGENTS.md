@@ -19,8 +19,8 @@ Conversation context, traces, and evaluations are cross-cutting requirements fro
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1. Domain and mock store foundation | Typed domain contracts, synthetic catalog/order/policy fixtures, and scoped deterministic store adapter | Committed as `5f82918` |
-| 2. Read-only support answers | Request prechecks, bounded intent classification, policy/account/catalog tools, grounded response and citation verification | Reviewed; commit approved |
-| 3. Checked support actions | Confirmed pre-fulfillment cancellation/address-change proposals and human-review case creation for returns, warranty, damage, and refund requests | Not started |
+| 2. Read-only support answers | Request prechecks, bounded intent classification, policy/account/catalog tools, grounded response and citation verification | Committed as `585b19a` |
+| 3. Checked support actions | Confirmed pre-fulfillment cancellation/address-change proposals and human-review case creation for returns, warranty, damage, and refund requests | Reviewed and approved for commit |
 | 4. Reviewable demo experience | Chat UI, role/session selection, visible ordered workflow, saved conversation/run trace, and architecture diagram | Not started |
 
 ## Phase 1 plan: domain and mock store foundation
@@ -119,4 +119,61 @@ Server-owned demo session -> owned conversation + recent context
 
 Phase 2 implementation was reviewed and approved for commit. Verification: 41 support offline tests, 35 existing Knowledge tests, and 3 shared run-registry tests passed. Support checks exercise strict inputs, typed policy rules and exact window boundaries, hybrid retrieval, index mismatch/missing/dimension failures, model and Jev adapter shapes, multi-tool evidence and usage, owned API persistence, follow-up context/fresh reads, one repair, confidence branches, numeric/action claim rejection, tool/token limits, and streamed provider failure/terminal persistence. Providers are fake; persistence uses isolated SQLite tables. Ruff and diff checks are required before review.
 
-Migration 009 is supplied but has not been applied to the configured PostgreSQL database; actual PostgreSQL migration execution and live OpenAI/Jev/embedding behavior remain unverified. No frontend changes or case/action execution are included. The Phase 2 review and commit gates are satisfied. Plan Phase 3 next; implementation requires review of its detailed plan.
+Migration 009 is supplied but has not been applied to the configured PostgreSQL database; actual PostgreSQL migration execution and live OpenAI/Jev/embedding behavior remain unverified. No frontend changes or case/action execution are included. The Phase 2 review and commit gates are satisfied. Phase 3 was subsequently approved.
+
+## Phase 3 plan: checked mock actions and human-review cases
+
+Phase 2 was committed as `585b19a`. The user approved this detailed plan. Phase 3 is implemented, reviewed, and approved for commit; no Phase 4 runtime work has started.
+
+### Goal
+
+Extend the existing conversation backend to support confirmed pre-fulfillment cancellations and address corrections, and to save human-review cases for returns, refunds, warranty/damage claims, and support escalation. The AI cannot issue refunds, approve returns, promise replacements, or decide human-review cases.
+
+### Request flow
+
+```text
+Owned conversation -> deterministic prechecks -> Jev intent + thresholds
+ -> scoped policy/order reads -> typed action or case proposal
+ -> deterministic ownership/schema/state/rule/evidence checks
+ -> Jev judges proposal support -> application acceptance threshold
+     cancellation/address change -> saved pending proposal
+        -> explicit confirmation -> fresh state/rule/version checks
+        -> atomic mock update + receipt + saved steps
+     return/refund/warranty/damage/human request -> saved human-review case
+        -> real local case ID + pending-review status
+```
+
+### Technical changes
+
+1. **Action and case contracts.** Define explicit enums and discriminated schemas in `contracts.py` for cancellation, address correction, human-review case categories, proposal states, confirmation decisions, and execution receipts. Return structured pending proposals and saved case/receipt references alongside the existing Markdown answer. Bind customer, conversation, run, and idempotency identifiers in application code. Never accept model-selected ownership, execution status, or case IDs.
+2. **Persistent mock order state.** Add support-specific local order records initialized idempotently from the synthetic fixture. Read order state through the same customer-scoped adapter boundary; use the database record as the source of truth after seeding. Include a version for conditional updates. Restarting the backend or signing in again must preserve a cancelled order or corrected address. Catalog and policy fixtures remain versioned source data, and orders remain outside the embedding index. Add migration 010 for orders, proposals, execution receipts, and cases.
+3. **Proposal generation within the current harness.** Extend the existing bounded single-agent output/tool contracts for action proposals and case requests. Reuse policy/order retrieval and the existing step/usage/evidence catalog. Missing order references, an incomplete replacement address, ambiguous intent, or unsupported operations produce a clarification. Deterministic proposal validation precedes Jev semantic support judgment; application thresholds then accept or decline the proposal. Keep customer-reported symptoms/reasons distinguishable from verified order/policy facts.
+4. **Confirmed cancellation and address correction.** Require a paid, unfulfilled, customer-owned order under the structured policy rules. Show the exact order and requested change in a persisted pending proposal. A typed confirmation endpoint approves or rejects that specific proposal; reading a suggestion or producing model text cannot execute it. On confirmation, re-read identity, order state/version, and current rules. Atomically apply the mock update and save a receipt. If the order state or proposal is stale, reject with an explained result rather than silently changing the proposed action. Cancellation never invokes a payment or refund tool.
+5. **Human-review cases.** Persist cases for return/refund review, warranty/damage claims, explicit human requests, unsupported actions, policy ambiguity, and unresolved failures. Attach only owned order references, relevant verified evidence, recent relevant conversation context, and clearly labeled customer statements. Generate the case ID in the application/database and return it only after successful persistence. State `pending_review` and explicitly describe what a human must decide. Requests outside return/warranty review windows still become cases; they are not automatically approved or denied. General support escalation may omit an order, while an order-specific case needs a resolved owned order.
+6. **Idempotency and ownership.** Give each proposal/case operation a server-issued stable idempotency key. Enforce unique keys and one terminal execution per proposal in the database. Repeated confirmations return the saved receipt; concurrent or conflicting confirmations cannot execute twice. Equivalent retries of one operation reuse its case ID. A new conversational request is a new operation; do not accidentally merge distinct customer issues. Confirmation and case history endpoints enforce session/conversation ownership.
+7. **Saved decisions and follow-ups.** Persist proposal checks, confirmation/rejection, execution-time rechecks, conditional updates, case creation, receipts, and explicit stop reasons in the existing ordered run history. Decision operations use shared `llm_runs` with links to the original proposal run. Subsequent messages can resolve the current pending proposal or saved case from structured conversation references. Allow customers to ask for their case status; the demo reports saved local state without inventing a human resolution or external ticket integration.
+8. **Offline component and workflow tests.** Verify strict schemas, scoped seeded orders, persistence across sessions, proposal grounding/thresholds, missing details, stale state/rules, cross-customer access, confirmation/rejection, idempotent retries, conflicting decisions, and rollback if receipt/case persistence fails. Exercise complete mocked workflows for cancellation, address correction, refund case creation, outside-window review, and a failure/handoff. Confirm follow-ups read updated order state or the saved case. Test API and streaming/history payloads, provider usage, and ordered checks without live model calls.
+
+### Acceptance criteria
+
+- An eligible cancellation or address correction waits for explicit confirmation, applies exactly once, and returns a saved receipt.
+- A shipped/label-created order or stale proposal cannot be automatically changed; the result explains the check and offers/routes human review.
+- Refund, return, warranty/damage, and general escalation requests receive a saved case ID and `pending_review`, without any refund, approval, or replacement promise.
+- Missing details prompt a targeted clarification before an order-specific case or action is accepted.
+- Follow-ups see the persisted latest order/proposal/case state; changing sessions or restarting does not reset mutations.
+- Customer identity and operation identifiers remain application-owned; another customer cannot read, confirm, or modify these records.
+- Offline component, transaction, API, and mocked multi-step workflow checks pass, plus relevant shared regression tests, Ruff, and `git diff --check`.
+
+### Scope and review gate
+
+This phase implements backend mock state and actions only. The chat interface, confirmation cards, citation tooltips, and architecture modal update belong to Phase 4. No payment/refund executor, external ticketing/carrier writes, simulated human resolution, or live LLM calls are included. Report PostgreSQL migration execution separately from isolated offline ORM tests. After approval, implement Phase 3 alone and present the uncommitted changes for review before starting Phase 4 or committing.
+
+## Phase 3 verification and review
+
+Implemented strict action/case contracts, persistent seeded orders, grounded proposals, explicit confirmation/rejection, fresh state/rule/version checks, atomic receipts and case persistence, owned case follow-ups, and safe saved-run replay. API progress includes persistence and final stop only after successful commit. Refund execution is absent.
+
+Offline verification: 60 Customer Support tests, 35 Knowledge tests, and 3 shared run-registry tests; fake model/Jev/embedding providers and isolated SQLite. Coverage includes multi-tool workflows, stale state/policy, rejected/invented proposals, cross-customer isolation, outside-window refund review, case follow-ups, repeated/conflicting/concurrent confirmations, and persistence rollback. Support Pyright, Ruff and diff whitespace checks pass. No live provider requests, frontend changes, or configured PostgreSQL migrations were performed. PostgreSQL execution/concurrency and live model quality remain unverified. The user reviewed Phase 3 and authorized its commit; Phase 4 requires its own detailed approved plan.
+
+### Configured database migration verification - October 1, 2026
+
+At the user's request, applied migrations 009 and 010 together in one transaction over a direct connection to the app's configured PostgreSQL database. Confirmed the shared `llm_runs` prerequisite and absence of support tables before applying. Verified all seven support tables, exact ORM column names, foreign-key targets, unique proposal/case idempotency keys, and unique receipt proposal IDs after commit. No customer records were seeded or changed, and no provider calls were made. This supersedes the earlier unapplied-migration notes; PostgreSQL end-to-end workflows/concurrency and live provider quality remain unverified.

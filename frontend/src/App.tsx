@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { backfillCompany, getResearchRun, getResearchRuns, streamResearch } from './api'
 import IncidentWorkspace from './IncidentWorkspace'
-import KnowledgeRetrievalPreview from './KnowledgeRetrievalPreview'
+import KnowledgeAssistant from './KnowledgeAssistant'
 import ArchitectureModal from './ArchitectureModal'
 import ResearchRunView from './ResearchRunView'
 import { CitationTooltip, CitationTooltipProvider } from './components/CitationTooltip'
@@ -308,7 +308,7 @@ function SystemScaffold({ tool }: { tool: ToolDefinition }) {
         <div><span>Key boundary</span><p>{tool.boundary}</p></div>
         <div><span>First runnable slice</span><p>{tool.firstSlice}</p></div>
       </div>
-      {tool.id === 'knowledge-action' && <KnowledgeRetrievalPreview />}
+      {tool.id === 'knowledge-action' && <KnowledgeAssistant />}
       <p className="scaffold-note">
         {tool.id === 'knowledge-action'
           ? 'Ingestion, retrieval, cited answers, and approval-gated mock support tasks run. Demo personas and approvers are simulated; task records stay local.'

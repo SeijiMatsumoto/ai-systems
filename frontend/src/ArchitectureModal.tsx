@@ -38,13 +38,13 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
       <div className="architecture-modal-frame">
         <header className="architecture-modal-header">
           <div>
-            <span className="section-kicker">System architecture · {systemId === 'knowledge-action' ? 'Read-only demo' : availability === 'ready' ? 'Runnable demo' : 'Proposed design'}</span>
+            <span className="section-kicker">System architecture · {availability === 'ready' ? 'Runnable demo' : 'Proposed design'}</span>
             <h2 id="architecture-modal-title">{title}</h2>
           </div>
           <button className="architecture-modal-close" type="button" onClick={() => dialogRef.current?.close()} autoFocus aria-label="Close architecture diagram">×</button>
         </header>
         <div className="architecture-modal-body">
-          {systemId === 'knowledge-action' && <p className="architecture-modal-note">Ingestion, access-scoped retrieval, cited answers, Jev grounding, and saved runs are implemented. The action approval lane is proposed.</p>}
+          {systemId === 'knowledge-action' && <p className="architecture-modal-note">The runnable demo includes indexed knowledge retrieval, cited answers, Jev grounding checks, and an approval-gated mock support task. Persona and approver selection are simulated; task records stay local.</p>}
           {availability === 'planned' && systemId !== 'knowledge-action' && <p className="architecture-modal-note">This diagram shows the intended boundaries. The workflow is an architecture scaffold and is not runnable yet.</p>}
           <Suspense fallback={<p className="architecture-modal-note">Loading diagram…</p>}>
             {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}

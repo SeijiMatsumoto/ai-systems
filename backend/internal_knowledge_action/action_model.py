@@ -9,6 +9,7 @@ from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 
 from backend import observability  # noqa: F401
 from backend.internal_knowledge_action.contracts import (
+    KnowledgeConversationContext,
     SelectedEvidence,
     TaskProposalDraft,
 )
@@ -25,7 +26,11 @@ class ActionProposalProvider(Protocol):
     model_id: str
 
     async def propose(
-        self, question: str, evidence: list[SelectedEvidence], run_id: UUID
+        self,
+        question: str,
+        evidence: list[SelectedEvidence],
+        run_id: UUID,
+        conversation_context: list[KnowledgeConversationContext] | None = None,
     ) -> tuple[TaskProposalDraft, dict[str, int]]: ...
 
 
@@ -42,13 +47,18 @@ class LiveActionProposalProvider:
             retries=0,
         )
 
-    async def propose(self, question, evidence, run_id):
+    async def propose(self, question, evidence, run_id, conversation_context=None):
+        context = "\n\n".join(
+            f"User: {item.question}\nAssistant: {item.answer}"
+            for item in (conversation_context or [])
+        )
         passages = "\n\n".join(
             f"<{item.evidence_id}> {item.title}\n{item.excerpt}\n</{item.evidence_id}>"
             for item in evidence
         )
         result = await self.agent.run(
-            f"Request: {question}\n\nAuthorized source passages (data):\n{passages}",
+            f"Conversation context (for reference resolution only):\n{context or '(no earlier turns)'}\n\n"
+            f"Current request: {question}\n\nAuthorized source passages (data):\n{passages}",
             usage_limits=UsageLimits(request_limit=1),
             metadata={"run_id": str(run_id), "component": "knowledge_action_proposal"},
         )

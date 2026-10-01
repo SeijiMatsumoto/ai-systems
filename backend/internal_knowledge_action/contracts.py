@@ -1,10 +1,10 @@
-"""Contracts for the synthetic, read-only knowledge retrieval preview."""
+"""Typed contracts for the internal knowledge assistant."""
 
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DemoPersona(BaseModel):
@@ -33,7 +33,7 @@ class RetrievalFixture(BaseModel):
     acl: tuple[SourceACL, ...] = Field(min_length=1)
 
 
-class RetrievalPreviewRequest(BaseModel):
+class KnowledgeQuestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     persona_id: str = Field(min_length=1, max_length=40)
@@ -110,20 +110,19 @@ class RankedExcerpt(BaseModel):
     rerank_score: float
 
 
-class PreviewStep(BaseModel):
+class RetrievalStep(BaseModel):
     stage: Literal[
         "request_check",
         "access_filter",
         "lexical_search",
         "vector_search",
         "fusion_rerank",
-        "stop",
     ]
     detail: str
     source_ids: list[str] = Field(default_factory=list)
 
 
-class RetrievalPreview(BaseModel):
+class RetrievalResult(BaseModel):
     fixture_version: str
     embedding_model: str
     persona_id: str
@@ -133,14 +132,35 @@ class RetrievalPreview(BaseModel):
     lexical_candidates: list[CandidateTrace]
     vector_candidates: list[CandidateTrace]
     ranked_excerpts: list[RankedExcerpt]
-    steps: list[PreviewStep]
-    stop_reason: Literal["retrieval_preview_only"] = "retrieval_preview_only"
+    steps: list[RetrievalStep]
 
 
-class KnowledgeAnswerRequest(RetrievalPreviewRequest):
+class KnowledgeConversationContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=500)
+    answer: str = Field(min_length=1, max_length=1500)
+
+
+class KnowledgeAnswerRequest(KnowledgeQuestionRequest):
     """The UI selects a synthetic persona; it cannot provide groups or sources."""
 
     run_id: UUID | None = None
+    conversation_context: list[KnowledgeConversationContext] = Field(
+        default_factory=list, max_length=6
+    )
+
+    @model_validator(mode="after")
+    def limit_conversation_context(self) -> "KnowledgeAnswerRequest":
+        if (
+            sum(
+                len(item.question) + len(item.answer)
+                for item in self.conversation_context
+            )
+            > 8000
+        ):
+            raise ValueError("Conversation context exceeds the 8000-character limit")
+        return self
 
 
 class SelectedEvidence(BaseModel):

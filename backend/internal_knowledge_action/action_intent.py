@@ -6,7 +6,10 @@ from typing import Protocol
 
 from typesafe_sdk import AsyncTypeSafeClient, Noul
 
-from backend.internal_knowledge_action.contracts import ActionIntentJudgment
+from backend.internal_knowledge_action.contracts import (
+    ActionIntentJudgment,
+    KnowledgeConversationContext,
+)
 
 JEV_MODEL = "jev-latest"
 TIMEOUT_SECONDS = 10
@@ -27,14 +30,22 @@ class ActionIntentProvider(Protocol):
     model_id: str
 
     async def classify(
-        self, question: str, signals: list[str]
+        self,
+        question: str,
+        signals: list[str],
+        conversation_context: list[KnowledgeConversationContext] | None = None,
     ) -> ActionIntentJudgment: ...
 
 
 class LiveJevActionIntentProvider:
     model_id = JEV_MODEL
 
-    async def classify(self, question: str, signals: list[str]) -> ActionIntentJudgment:
+    async def classify(
+        self,
+        question: str,
+        signals: list[str],
+        conversation_context: list[KnowledgeConversationContext] | None = None,
+    ) -> ActionIntentJudgment:
         async with asyncio.timeout(TIMEOUT_SECONDS):
             async with AsyncTypeSafeClient(timeout=TIMEOUT_SECONDS) as client:
                 response = await client.system_one(
@@ -42,6 +53,10 @@ class LiveJevActionIntentProvider:
                     state={
                         "request": question,
                         "deterministic_action_signals": signals,
+                        "conversation_context": [
+                            item.model_dump(mode="json")
+                            for item in (conversation_context or [])
+                        ],
                     },
                     questions={
                         "explicit_action": Noul(

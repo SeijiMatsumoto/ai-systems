@@ -1,5 +1,6 @@
 """Saved knowledge answer and proposal flow with ACL and verification boundaries."""
 
+import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Any
@@ -32,10 +33,10 @@ from backend.internal_knowledge_action.contracts import (
     IndexSnapshot,
     KnowledgeAnswerRequest,
     KnowledgeAnswerResult,
+    KnowledgeQuestionRequest,
     KnowledgeStep,
     KnowledgeTaskProposal,
     RetrievalFixture,
-    RetrievalPreviewRequest,
     SelectedEvidence,
 )
 from backend.internal_knowledge_action.embedding import (
@@ -55,11 +56,24 @@ from backend.internal_knowledge_action.ingestion import (
 )
 from backend.internal_knowledge_action.retrieval import (
     normalize_question,
-    preview_retrieval,
+    retrieve_knowledge,
 )
 
 SessionScope = Callable[[], AbstractContextManager[Session]]
 StepCallback = Callable[[KnowledgeStep], None]
+MAX_RETRIEVAL_QUERY_CHARS = 500
+
+
+def _retrieval_query(request: KnowledgeAnswerRequest, question: str) -> str:
+    """Add bounded prior-turn text so short follow-ups can retrieve their topic."""
+    if not request.conversation_context:
+        return question
+    latest = request.conversation_context[-1]
+    remaining = MAX_RETRIEVAL_QUERY_CHARS - len(question)
+    if remaining <= 0:
+        return question
+    context_text = f" {latest.question} {latest.answer}"
+    return f"{question}{context_text[:remaining]}"
 
 
 def _embedder_for(index: IndexSnapshot) -> EmbeddingProvider:
@@ -184,12 +198,23 @@ async def run_answer(
     stage = "retrieval"
     try:
         question = normalize_question(request.question)
+        retrieval_question = _retrieval_query(request, question)
         signals = detect_action_signals(question)
+        if request.conversation_context and re.search(
+            r"\b(it|that|this|those|them|same|there)\b", question, re.IGNORECASE
+        ):
+            signals.append("contextual_follow_up")
         emit(
             "request_check",
             "completed",
             "Validated request before any model call",
-            {"question": question, "length": len(question), "max_length": 500},
+            {
+                "question": question,
+                "length": len(question),
+                "max_length": 500,
+                "context_turns": len(request.conversation_context),
+                "retrieval_query": retrieval_question,
+            },
         )
         action_request = False
         if signals:
@@ -208,10 +233,16 @@ async def run_answer(
                 {
                     "model": action_classifier.model_id,
                     "request": question,
+                    "conversation_context": [
+                        item.model_dump(mode="json")
+                        for item in request.conversation_context
+                    ],
                     "request_limit": 1,
                 },
             )
-            judgment = await action_classifier.classify(question, signals)
+            judgment = await action_classifier.classify(
+                question, signals, request.conversation_context
+            )
             result.usage["jev_action_intent"] = judgment.usage
             action_request = judgment.probability >= ACTION_THRESHOLD
             emit(
@@ -238,9 +269,9 @@ async def run_answer(
             if index is None or not index_matches_fixture(index, fixture):
                 raise ValueError("Build or refresh the fixture index first")
             embedder = embedder or _embedder_for(index)
-            preview = preview_retrieval(
-                RetrievalPreviewRequest(
-                    persona_id=request.persona_id, question=question
+            retrieval = retrieve_knowledge(
+                KnowledgeQuestionRequest(
+                    persona_id=request.persona_id, question=retrieval_question
                 ),
                 fixture,
                 index,
@@ -263,13 +294,13 @@ async def run_answer(
                     excerpt=item.excerpt,
                     locator=item.locator,
                 )
-                for i, item in enumerate(preview.ranked_excerpts, 1)
+                for i, item in enumerate(retrieval.ranked_excerpts, 1)
                 if sources.get(item.locator.source_id)
                 and sources[item.locator.source_id].kind == "ticket"
             ]
             result.fixture_version = fixture.version
             result.embedding_model = index.embedding_model
-            result.authorized_source_ids = preview.authorized_source_ids
+            result.authorized_source_ids = retrieval.authorized_source_ids
             result.evidence = ticket_evidence
             emit(
                 "access_filter",
@@ -277,7 +308,7 @@ async def run_answer(
                 "Resolved requester identity and ACL scope before proposal model",
                 {
                     "persona_id": request.persona_id,
-                    "source_ids": preview.authorized_source_ids,
+                    "source_ids": retrieval.authorized_source_ids,
                 },
             )
             emit(
@@ -287,7 +318,7 @@ async def run_answer(
                 {
                     "candidates": [
                         item.model_dump(mode="json")
-                        for item in preview.lexical_candidates
+                        for item in retrieval.lexical_candidates
                     ]
                 },
             )
@@ -299,7 +330,7 @@ async def run_answer(
                     "embedding_model": index.embedding_model,
                     "candidates": [
                         item.model_dump(mode="json")
-                        for item in preview.vector_candidates
+                        for item in retrieval.vector_candidates
                     ],
                 },
             )
@@ -309,7 +340,8 @@ async def run_answer(
                 "Selected citable support-ticket excerpts for the proposal",
                 {
                     "ranked_excerpts": [
-                        item.model_dump(mode="json") for item in preview.ranked_excerpts
+                        item.model_dump(mode="json")
+                        for item in retrieval.ranked_excerpts
                     ],
                     "ticket_evidence_ids": [
                         item.evidence_id for item in ticket_evidence
@@ -343,6 +375,11 @@ async def run_answer(
                     "Sent only ACL-authorized ticket evidence to typed proposal model",
                     {
                         "request": question,
+                        "conversation_context_turns": len(request.conversation_context),
+                        "conversation_context": [
+                            item.model_dump(mode="json")
+                            for item in request.conversation_context
+                        ],
                         "evidence": [
                             item.model_dump(mode="json") for item in ticket_evidence
                         ],
@@ -351,7 +388,10 @@ async def run_answer(
                     },
                 )
                 draft, usage = await action_proposer.propose(
-                    question, ticket_evidence, run_id
+                    question,
+                    ticket_evidence,
+                    run_id,
+                    request.conversation_context,
                 )
                 result.usage["action_proposal"] = usage
                 valid_ids = {item.evidence_id for item in ticket_evidence}
@@ -401,9 +441,9 @@ async def run_answer(
             if index is None or not index_matches_fixture(index, fixture):
                 raise ValueError("Build or refresh the fixture index first")
             embedder = embedder or _embedder_for(index)
-            preview = preview_retrieval(
-                RetrievalPreviewRequest(
-                    persona_id=request.persona_id, question=question
+            retrieval = retrieve_knowledge(
+                KnowledgeQuestionRequest(
+                    persona_id=request.persona_id, question=retrieval_question
                 ),
                 fixture,
                 index,
@@ -411,14 +451,14 @@ async def run_answer(
             )
             result.fixture_version = fixture.version
             result.embedding_model = index.embedding_model
-            result.authorized_source_ids = preview.authorized_source_ids
+            result.authorized_source_ids = retrieval.authorized_source_ids
             emit(
                 "access_filter",
                 "completed",
                 "Resolved demo persona and ACL scope",
                 {
                     "persona_id": request.persona_id,
-                    "source_ids": preview.authorized_source_ids,
+                    "source_ids": retrieval.authorized_source_ids,
                 },
             )
             emit(
@@ -429,7 +469,7 @@ async def run_answer(
                     "question": question,
                     "candidates": [
                         item.model_dump(mode="json")
-                        for item in preview.lexical_candidates
+                        for item in retrieval.lexical_candidates
                     ],
                 },
             )
@@ -442,7 +482,7 @@ async def run_answer(
                     "embedding_model": index.embedding_model,
                     "candidates": [
                         item.model_dump(mode="json")
-                        for item in preview.vector_candidates
+                        for item in retrieval.vector_candidates
                     ],
                 },
             )
@@ -454,7 +494,7 @@ async def run_answer(
                     excerpt=item.excerpt,
                     locator=item.locator,
                 )
-                for rank, item in enumerate(preview.ranked_excerpts, 1)
+                for rank, item in enumerate(retrieval.ranked_excerpts, 1)
             ]
             result.evidence = evidence
             emit(
@@ -463,7 +503,8 @@ async def run_answer(
                 "Selected bounded citable context",
                 {
                     "ranked_excerpts": [
-                        item.model_dump(mode="json") for item in preview.ranked_excerpts
+                        item.model_dump(mode="json")
+                        for item in retrieval.ranked_excerpts
                     ],
                     "evidence_ids": [item.evidence_id for item in evidence],
                 },
@@ -487,7 +528,9 @@ async def run_answer(
                         "private_reasoning": "unavailable",
                     },
                 )
-                draft, usage = await answerer.answer(question, evidence, run_id)
+                draft, usage = await answerer.answer(
+                    question, evidence, run_id, request.conversation_context
+                )
                 result.usage["answer_model"] = usage
                 emit(
                     "model_output",
@@ -508,7 +551,7 @@ async def run_answer(
                             catalog,
                             fixture,
                             index,
-                            set(preview.authorized_source_ids),
+                            set(retrieval.authorized_source_ids),
                         )
                         checks.append(
                             ClaimVerification(

@@ -15,7 +15,7 @@ from backend.internal_knowledge_action.contracts import (
 )
 from backend.internal_knowledge_action.embedding import EmbeddingProvider
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "corpus_v2.json"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "corpus_v3.json"
 INDEX_PATH = Path(__file__).parent / "fixtures" / "knowledge_index.local"
 MAX_CHUNK_CHARS = 180
 

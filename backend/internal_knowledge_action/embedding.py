@@ -80,7 +80,6 @@ class MockEmbeddingProvider:
         "vacation": "leave",
         "holiday": "leave",
         "left": "remaining",
-        "reimbursement": "refund",
         "oncall": "rotation",
         "deployment": "deploy",
         "deployments": "deploy",

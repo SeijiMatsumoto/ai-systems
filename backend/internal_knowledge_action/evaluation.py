@@ -7,13 +7,13 @@ from pydantic import BaseModel, Field
 
 from backend.internal_knowledge_action.contracts import (
     IndexSnapshot,
+    KnowledgeQuestionRequest,
     RetrievalFixture,
-    RetrievalPreviewRequest,
 )
 from backend.internal_knowledge_action.embedding import EmbeddingProvider
-from backend.internal_knowledge_action.retrieval import preview_retrieval
+from backend.internal_knowledge_action.retrieval import retrieve_knowledge
 
-EVAL_PATH = Path(__file__).parent / "fixtures" / "retrieval_eval_v2.json"
+EVAL_PATH = Path(__file__).parent / "fixtures" / "retrieval_eval_v3.json"
 
 
 class RetrievalCase(BaseModel):
@@ -50,8 +50,10 @@ def evaluate_retrieval(
     no_answer_count = 0
     unauthorized = 0
     for case in dataset.cases:
-        result = preview_retrieval(
-            RetrievalPreviewRequest(persona_id=case.persona_id, question=case.question),
+        result = retrieve_knowledge(
+            KnowledgeQuestionRequest(
+                persona_id=case.persona_id, question=case.question
+            ),
             fixture,
             index,
             embedder,

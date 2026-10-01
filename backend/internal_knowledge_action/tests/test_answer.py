@@ -23,6 +23,7 @@ from backend.internal_knowledge_action.contracts import (
     AnswerDraft,
     GroundingJudgment,
     KnowledgeAnswerRequest,
+    KnowledgeConversationContext,
     TaskProposalDraft,
 )
 from backend.internal_knowledge_action.embedding import MockEmbeddingProvider
@@ -47,8 +48,8 @@ class FakeAnswerer:
         self.error = error
         self.calls = []
 
-    async def answer(self, question, evidence, run_id):
-        self.calls.append((question, evidence, run_id))
+    async def answer(self, question, evidence, run_id, conversation_context=None):
+        self.calls.append((question, evidence, run_id, conversation_context or []))
         if self.error:
             raise RuntimeError("fake provider failed")
         return self.draft, {"requests": 1, "input_tokens": 42, "output_tokens": 11}
@@ -82,8 +83,8 @@ class FakeActionClassifier:
         self.error = error
         self.calls = []
 
-    async def classify(self, question, signals):
-        self.calls.append((question, signals))
+    async def classify(self, question, signals, conversation_context=None):
+        self.calls.append((question, signals, conversation_context or []))
         if self.error:
             raise RuntimeError("fake intent provider failed")
         from backend.internal_knowledge_action.contracts import ActionIntentJudgment
@@ -100,8 +101,8 @@ class FakeActionProposer:
         self.error = error
         self.calls = []
 
-    async def propose(self, question, evidence, run_id):
-        self.calls.append((question, evidence, run_id))
+    async def propose(self, question, evidence, run_id, conversation_context=None):
+        self.calls.append((question, evidence, run_id, conversation_context or []))
         if self.error:
             raise RuntimeError("fake proposal failed")
         return TaskProposalDraft(
@@ -188,10 +189,15 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         on_step=None,
         action_classifier=None,
         action_proposer=None,
+        conversation_context=None,
     ):
         classifier = action_classifier or FakeActionClassifier()
         return await run_answer(
-            KnowledgeAnswerRequest(persona_id=persona_id, question=question),
+            KnowledgeAnswerRequest(
+                persona_id=persona_id,
+                question=question,
+                conversation_context=conversation_context or [],
+            ),
             fixture=self.fixture,
             index=self.index,
             embedder=self.embedder,
@@ -261,6 +267,66 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied.available_actions, [])
         self.assertEqual(len(answerer.calls), 1)
         self.assertNotIn("ticket-support-214", denied.model_dump_json())
+
+    async def test_follow_up_context_is_forwarded_and_used_for_retrieval(self):
+        context = [
+            KnowledgeConversationContext(
+                question="What should support do when a shipment is late?",
+                answer="Check the carrier and order status, then route a stalled shipment to fulfillment.",
+            )
+        ]
+        answerer = FakeAnswerer()
+        classifier = FakeActionClassifier(probability=0.1)
+        result = await self.run_case(
+            "alex",
+            "What if it is still delayed?",
+            answerer,
+            action_classifier=classifier,
+            conversation_context=context,
+        )
+        self.assertEqual(result.stop_reason, "answered")
+        self.assertEqual(answerer.calls[0][3], context)
+        self.assertIn("contextual_follow_up", classifier.calls[0][1])
+        self.assertIn(
+            "ticket-support-288", [item.locator.source_id for item in result.evidence]
+        )
+        self.assertIn("shipment", result.steps[0].details["retrieval_query"])
+
+    async def test_referential_action_follow_up_runs_jev_with_prior_context(self):
+        context = [
+            KnowledgeConversationContext(
+                question="What happens to ticket 214 after a customer asks for a refund?",
+                answer="A support lead reviews the ticket before any refund is processed.",
+            )
+        ]
+        classifier = FakeActionClassifier()
+        result = await self.run_case(
+            "alex",
+            "Can you do that?",
+            action_classifier=classifier,
+            conversation_context=context,
+        )
+        self.assertEqual(result.stop_reason, "action_proposal_pending")
+        self.assertIn("contextual_follow_up", classifier.calls[0][1])
+        self.assertEqual(classifier.calls[0][2], context)
+
+    async def test_conversation_context_has_six_turn_and_character_caps(self):
+        turns = [
+            KnowledgeConversationContext(question="Q", answer="A") for _ in range(7)
+        ]
+        with self.assertRaisesRegex(ValueError, "at most 6"):
+            KnowledgeAnswerRequest(
+                persona_id="alex", question="Follow up", conversation_context=turns
+            )
+        with self.assertRaisesRegex(ValueError, "8000-character limit"):
+            KnowledgeAnswerRequest(
+                persona_id="alex",
+                question="Follow up",
+                conversation_context=[
+                    KnowledgeConversationContext(question="Q", answer="A" * 1500)
+                    for _ in range(6)
+                ],
+            )
 
     async def test_no_answer_and_action_keyword_before_jev_decision(self):
         answerer = FakeAnswerer()
@@ -582,6 +648,12 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_adapter_shapes_use_only_selected_passages(self):
         result = await self.run_case("alex", "How do I request time off?")
         selected = result.evidence[:1]
+        context = [
+            KnowledgeConversationContext(
+                question="Where do I check my leave balance?",
+                answer="Open the people portal to review the available balance.",
+            )
+        ]
 
         class FakeAgent:
             async def run(self, prompt, **kwargs):
@@ -594,10 +666,14 @@ class AnswerTests(unittest.IsolatedAsyncioTestCase):
         answerer = LiveAnswerProvider.__new__(LiveAnswerProvider)
         answerer.agent = FakeAgent()
         draft, usage = await answerer.answer(
-            "How do I request time off?", selected, result.run_id
+            "How do I request time off?", selected, result.run_id, context
         )
         self.assertTrue(draft.abstain)
         self.assertIn(selected[0].excerpt, answerer.agent.prompt)
+        self.assertIn(context[0].question, answerer.agent.prompt)
+        self.assertIn(
+            "Current question: How do I request time off?", answerer.agent.prompt
+        )
         self.assertNotIn("ticket-support-214", answerer.agent.prompt)
         self.assertEqual(answerer.agent.kwargs["usage_limits"].request_limit, 1)
         self.assertIsInstance(usage, dict)

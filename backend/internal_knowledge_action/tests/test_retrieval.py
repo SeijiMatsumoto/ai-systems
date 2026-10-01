@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from backend.internal_knowledge_action.contracts import RetrievalPreviewRequest
+from backend.internal_knowledge_action.contracts import KnowledgeQuestionRequest
 from backend.internal_knowledge_action.embedding import (
     MockEmbeddingProvider,
     OpenAIEmbeddingProvider,
@@ -24,7 +24,7 @@ from backend.internal_knowledge_action.ingestion import (
     load_index,
     save_index,
 )
-from backend.internal_knowledge_action.retrieval import preview_retrieval
+from backend.internal_knowledge_action.retrieval import retrieve_knowledge
 from backend.main import app
 
 
@@ -171,13 +171,21 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(rebuilt.embedding_model, "mock-embedding-v2")
 
     def test_acl_scopes_both_candidate_paths_and_output(self) -> None:
-        request = RetrievalPreviewRequest(
+        request = KnowledgeQuestionRequest(
             persona_id="alex",
             question="engineering rotation build pipeline restricted documents",
         )
-        result = preview_retrieval(request, self.fixture, self.index, self.embedder)
+        result = retrieve_knowledge(request, self.fixture, self.index, self.embedder)
         self.assertEqual(
-            result.authorized_source_ids, ["policy-leave-v1", "ticket-support-214"]
+            result.authorized_source_ids,
+            [
+                "policy-leave-v1",
+                "ticket-support-214",
+                "policy-expenses-v1",
+                "policy-security-v1",
+                "doc-onboarding-v1",
+                "ticket-support-288",
+            ],
         )
         self.assertTrue(
             all(
@@ -194,8 +202,8 @@ class RetrievalTests(unittest.TestCase):
         self.assertNotIn("IGNORE ALL PREVIOUS", result.model_dump_json())
 
     def test_vector_path_recovers_paraphrase_missing_from_lexical_path(self) -> None:
-        result = preview_retrieval(
-            RetrievalPreviewRequest(
+        result = retrieve_knowledge(
+            KnowledgeQuestionRequest(
                 persona_id="alex", question="How much PTO is left?"
             ),
             self.fixture,
@@ -207,8 +215,8 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result.ranked_excerpts[0].vector_rank, 1)
 
     def test_ranked_chunk_includes_exact_procedural_paragraph(self) -> None:
-        result = preview_retrieval(
-            RetrievalPreviewRequest(
+        result = retrieve_knowledge(
+            KnowledgeQuestionRequest(
                 persona_id="alex", question="How do I request time off?"
             ),
             self.fixture,
@@ -232,8 +240,8 @@ class RetrievalTests(unittest.TestCase):
             self.assertEqual(item.excerpt, body[item.locator.start : item.locator.end])
 
     def test_no_authorized_answer_and_injection_remains_data(self) -> None:
-        denied = preview_retrieval(
-            RetrievalPreviewRequest(
+        denied = retrieve_knowledge(
+            KnowledgeQuestionRequest(
                 persona_id="morgan",
                 question="What happens to a customer refund request?",
             ),
@@ -242,8 +250,8 @@ class RetrievalTests(unittest.TestCase):
             self.embedder,
         )
         self.assertEqual(denied.ranked_excerpts, [])
-        found = preview_retrieval(
-            RetrievalPreviewRequest(
+        found = retrieve_knowledge(
+            KnowledgeQuestionRequest(
                 persona_id="morgan", question="build pipeline deployments"
             ),
             self.fixture,
@@ -254,7 +262,6 @@ class RetrievalTests(unittest.TestCase):
             "doc-engineering-injection",
             [item.locator.source_id for item in found.ranked_excerpts],
         )
-        self.assertEqual(found.stop_reason, "retrieval_preview_only")
         self.assertEqual(
             [step.stage for step in found.steps],
             [
@@ -263,7 +270,6 @@ class RetrievalTests(unittest.TestCase):
                 "lexical_search",
                 "vector_search",
                 "fusion_rerank",
-                "stop",
             ],
         )
 
@@ -271,10 +277,10 @@ class RetrievalTests(unittest.TestCase):
         outcome = evaluate_retrieval(
             self.fixture, self.index, self.embedder, load_dataset()
         )
-        self.assertEqual(outcome.case_count, 12)
+        self.assertEqual(outcome.case_count, 27)
         self.assertEqual(outcome.recall_at_3, 1.0)
-        self.assertEqual(outcome.precision_among_returned, 0.944)
-        self.assertEqual(outcome.top_1_accuracy, 1.0)
+        self.assertEqual(outcome.precision_among_returned, 0.667)
+        self.assertEqual(outcome.top_1_accuracy, 0.857)
         self.assertEqual(outcome.no_answer_accuracy, 1.0)
         self.assertEqual(outcome.unauthorized_source_count, 0)
 
@@ -294,36 +300,15 @@ class RetrievalTests(unittest.TestCase):
             model="text-embedding-3-small", input=["first", "second"]
         )
 
-    def test_api_requires_index_and_rejects_user_supplied_groups(self) -> None:
+    def test_retrieval_preview_endpoint_is_removed(self) -> None:
         client = TestClient(app)
-        with patch(
-            "backend.internal_knowledge_action.api.load_index", return_value=None
-        ):
-            missing = client.post(
-                "/agent/internal_knowledge_action/retrieval-preview",
-                json={"persona_id": "alex", "question": "leave"},
-            )
-        self.assertEqual(missing.status_code, 409)
-        invalid = client.post(
+        response = client.post(
             "/agent/internal_knowledge_action/retrieval-preview",
-            json={"persona_id": "alex", "question": "leave", "groups": ["engineering"]},
+            json={"persona_id": "alex", "question": "leave"},
         )
-        self.assertEqual(invalid.status_code, 422)
-        oversized = client.post(
-            "/agent/internal_knowledge_action/retrieval-preview",
-            json={"persona_id": "alex", "question": "x" * 501},
-        )
-        self.assertEqual(oversized.status_code, 422)
-        with patch(
-            "backend.internal_knowledge_action.api.load_index", return_value=self.index
-        ):
-            unknown = client.post(
-                "/agent/internal_knowledge_action/retrieval-preview",
-                json={"persona_id": "unknown", "question": "leave"},
-            )
-        self.assertEqual(unknown.status_code, 404)
+        self.assertEqual(response.status_code, 404)
 
-    def test_api_mock_ingestion_and_preview_without_real_provider(self) -> None:
+    def test_api_mock_ingestion_without_real_provider(self) -> None:
         client = TestClient(app)
         saved: list = []
         with (
@@ -341,18 +326,6 @@ class RetrievalTests(unittest.TestCase):
             self.assertEqual(built.json()["embedded_chunks"], len(self.index.chunks))
             status = client.get("/agent/internal_knowledge_action/index-status")
             self.assertTrue(status.json()["ready"])
-            preview = client.post(
-                "/agent/internal_knowledge_action/retrieval-preview",
-                json={"persona_id": "alex", "question": "How do I request time off?"},
-            )
-        self.assertEqual(preview.status_code, 200)
-        self.assertEqual(
-            preview.json()["embedding_model"], MockEmbeddingProvider.model_id
-        )
-        self.assertEqual(
-            preview.json()["ranked_excerpts"][0]["locator"]["source_id"],
-            "policy-leave-v1",
-        )
 
 
 if __name__ == "__main__":

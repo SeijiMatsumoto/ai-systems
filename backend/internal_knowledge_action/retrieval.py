@@ -7,11 +7,11 @@ from collections import Counter
 from backend.internal_knowledge_action.contracts import (
     CandidateTrace,
     IndexSnapshot,
-    PreviewStep,
+    KnowledgeQuestionRequest,
     RankedExcerpt,
     RetrievalFixture,
-    RetrievalPreview,
-    RetrievalPreviewRequest,
+    RetrievalResult,
+    RetrievalStep,
     SourceLocator,
 )
 from backend.internal_knowledge_action.embedding import STOP_WORDS, EmbeddingProvider
@@ -98,12 +98,12 @@ def _lexical_scores(question: str, chunks: list) -> dict[str, tuple[float, int]]
     return scores
 
 
-def preview_retrieval(
-    request: RetrievalPreviewRequest,
+def retrieve_knowledge(
+    request: KnowledgeQuestionRequest,
     fixture: RetrievalFixture,
     index: IndexSnapshot,
     embedder: EmbeddingProvider,
-) -> RetrievalPreview:
+) -> RetrievalResult:
     normalized = normalize_question(request.question)
     persona = next(
         (item for item in fixture.personas if item.persona_id == request.persona_id),
@@ -193,7 +193,7 @@ def preview_retrieval(
             )
         )
 
-    return RetrievalPreview(
+    return RetrievalResult(
         fixture_version=fixture.version,
         embedding_model=index.embedding_model,
         persona_id=persona.persona_id,
@@ -220,33 +220,29 @@ def preview_retrieval(
         ],
         ranked_excerpts=excerpts,
         steps=[
-            PreviewStep(
+            RetrievalStep(
                 stage="request_check",
                 detail="Validated and normalized the question; recorded cheap action keyword signals.",
             ),
-            PreviewStep(
+            RetrievalStep(
                 stage="access_filter",
                 detail="Resolved server-owned persona groups and limited both searches to authorized indexed chunks.",
                 source_ids=authorized_ids,
             ),
-            PreviewStep(
+            RetrievalStep(
                 stage="lexical_search",
                 detail="Scored authorized chunks with BM25-style term weighting.",
                 source_ids=[chunk_by_id[item[0]].source_id for item in lexical],
             ),
-            PreviewStep(
+            RetrievalStep(
                 stage="vector_search",
                 detail=f"Embedded the question with {embedder.model_id} and compared only authorized chunk vectors.",
                 source_ids=[chunk_by_id[item[0]].source_id for item in vectors],
             ),
-            PreviewStep(
+            RetrievalStep(
                 stage="fusion_rerank",
                 detail="Fused keyword and vector ranks, then applied a bounded deterministic rerank before context assembly.",
                 source_ids=[item.locator.source_id for item in excerpts],
-            ),
-            PreviewStep(
-                stage="stop",
-                detail="Retrieval preview complete. No answer model or action ran.",
             ),
         ],
     )

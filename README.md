@@ -25,7 +25,7 @@ cd backend
 ./run
 ```
 
-Open `http://127.0.0.1:8000/docs`. The launcher uses the repo's `.venv`, loads `backend/.env`, and reloads on backend code changes. The ASGI app exposes the research API, incident routes, and Knowledge + Action ingestion, retrieval preview, answer stream, and approval decision. Calling a research, incident, or knowledge answer route normally uses its configured model. The knowledge UI's mock ingestion and retrieval-only paths use a fake embedding provider; an explicitly built OpenAI index uses live query embeddings. Opening `/docs` makes no provider call. Apply migrations 007 and 008 to other existing databases before saving answers and mock tasks.
+Open `http://127.0.0.1:8000/docs`. The launcher uses the repo's `.venv`, loads `backend/.env`, and reloads on backend code changes. The ASGI app exposes the research API, incident routes, and Knowledge + Action ingestion, answer stream, saved-run history, and approval decision. Calling a research, incident, or knowledge answer route normally uses its configured model. The knowledge UI's mock ingestion uses a fake embedding provider; an explicitly built OpenAI index uses live query embeddings. Retrieval details appear in the system architecture modal and in each saved workflow trace. Opening `/docs` makes no provider call. Apply migrations 007 and 008 to other existing databases before saving answers and mock tasks.
 
 For a fresh clone on another machine, complete one-time setup from the repository root:
 

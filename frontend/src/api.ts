@@ -14,7 +14,7 @@ import type {
 } from './types'
 import { readResearchStream } from './researchStream'
 import { readKnowledgeStream } from './knowledgeStream'
-import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
+import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeConversationContext, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeStep } from './types'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
@@ -42,13 +42,6 @@ export function buildKnowledgeMockIndex(): Promise<KnowledgeIndexBuildReport> {
   return apiRequest('/agent/internal_knowledge_action/index-fixture', { method: 'POST' })
 }
 
-export function previewKnowledgeRetrieval(personaId: string, question: string): Promise<KnowledgeRetrievalPreview> {
-  return apiRequest('/agent/internal_knowledge_action/retrieval-preview', {
-    method: 'POST',
-    body: JSON.stringify({ persona_id: personaId, question }),
-  })
-}
-
 export function getKnowledgeAnswers(limit = 10): Promise<KnowledgeAnswerSummary[]> {
   return apiRequest(`/agent/internal_knowledge_action/answers?limit=${limit}`)
 }
@@ -61,12 +54,13 @@ export async function streamKnowledgeAnswer(
   personaId: string,
   question: string,
   runId: string,
+  conversationContext: KnowledgeConversationContext[],
   onStep: (step: KnowledgeStep) => void,
 ): Promise<KnowledgeAnswerResult> {
   const response = await fetch(`${API_BASE_URL}/agent/internal_knowledge_action/answer-stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ persona_id: personaId, question, run_id: runId }),
+    body: JSON.stringify({ persona_id: personaId, question, run_id: runId, conversation_context: conversationContext }),
   })
   if (!response.ok) {
     const payload: { detail?: string } = await response.json().catch(() => ({}))

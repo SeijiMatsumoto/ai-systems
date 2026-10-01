@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { buildKnowledgeMockIndex, decideKnowledgeAction, getKnowledgeAnswer, getKnowledgeAnswers, getKnowledgeApprovers, getKnowledgeIndexStatus, getKnowledgePersonas, previewKnowledgeRetrieval, streamKnowledgeAnswer } from './api'
+import { buildKnowledgeMockIndex, decideKnowledgeAction, getKnowledgeAnswer, getKnowledgeAnswers, getKnowledgeApprovers, getKnowledgeIndexStatus, getKnowledgePersonas, streamKnowledgeAnswer } from './api'
 import { CitationTooltip } from './components/CitationTooltip'
 import { MarkdownContent } from './components/MarkdownContent'
 import TaskScroll from './TaskScroll'
 import { taskTrail } from './taskTrail'
-import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeEvidence, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeRetrievalPreview, KnowledgeStep } from './types'
+import type { DemoPersona, KnowledgeAnswerResult, KnowledgeAnswerSummary, KnowledgeApprover, KnowledgeConversationContext, KnowledgeEvidence, KnowledgeIndexBuildReport, KnowledgeIndexStatus, KnowledgeStep } from './types'
 import { presentKnowledgeAnswer } from './knowledgeAnswerPresentation'
 
 function CitationBadges({ citations }: { citations: KnowledgeEvidence[] }) {
-  return <span className="knowledge-answer-citations">{citations.map((item) => <CitationTooltip
+  const uniqueCitations = [...new Map(citations.map((item) => [item.evidence_id, item])).values()]
+  if (uniqueCitations.length === 0) return null
+  return <span className="knowledge-answer-citations">{uniqueCitations.map((item, index) => <CitationTooltip
     key={item.evidence_id}
     className="knowledge-citation-chip"
-    label={`${item.title} · ${item.evidence_id}`}
+    label={`${index + 1}. ${item.title}`}
     sourceTitle={item.title}
     excerpt={item.excerpt}
     metadata={[
@@ -37,10 +39,12 @@ function describeKnowledgeStep(step: KnowledgeStep) {
 function KnowledgeClaims({ answer }: { answer: KnowledgeAnswerResult }) {
   const view = presentKnowledgeAnswer(answer)
   if (!view?.claims.length) return null
+  const citations = view.claims.flatMap((claim) => claim.citations)
   return <div className={`knowledge-answer-claim knowledge-answer-${view.format}`}>
-    {view.format === 'numbered_list' ? <ol>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></li>)}</ol>
-      : view.format === 'bullet_list' ? <ul>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></li>)}</ul>
-        : view.claims.map((claim, index) => <div key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent><CitationBadges citations={claim.citations} /></div>)}
+    {view.format === 'numbered_list' ? <ol>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent></li>)}</ol>
+      : view.format === 'bullet_list' ? <ul>{view.claims.map((claim, index) => <li key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent></li>)}</ul>
+        : view.claims.map((claim, index) => <div key={`${index}-${claim.statement}`}><MarkdownContent>{claim.statement}</MarkdownContent></div>)}
+    {citations.length > 0 && <div className="knowledge-answer-source-list"><span>Sources</span><CitationBadges citations={citations} /></div>}
   </div>
 }
 
@@ -75,14 +79,39 @@ function setRunUrl(runId: string | null) {
   window.history.replaceState({}, '', url)
 }
 
-export default function KnowledgeRetrievalPreview() {
+function answerContext(answer: KnowledgeAnswerResult): KnowledgeConversationContext | null {
+  const assistantMessage = answer.claims.map((claim) => claim.statement).join('\n')
+    || (answer.action_proposal
+      ? `${answer.action_proposal.title}\n${answer.action_proposal.description}\nStatus: ${answer.action_status ?? 'pending'}`
+      : presentKnowledgeAnswer(answer).message)
+  return {
+    question: answer.request.question,
+    answer: assistantMessage,
+  }
+}
+
+const ROLE_SUGGESTIONS: Record<string, string[]> = {
+  alex: [
+    'What receipts do I need for a business expense?',
+    'What happens to a customer refund request?',
+    'What should support do when a shipment is late?',
+  ],
+  morgan: [
+    'What should I check before a production release?',
+    'What details belong in an on-call handoff?',
+    'How should I report a lost work device?',
+  ],
+}
+
+export default function KnowledgeAssistant() {
   const [personas, setPersonas] = useState<DemoPersona[]>([])
   const [approvers, setApprovers] = useState<KnowledgeApprover[]>([])
   const [approverId, setApproverId] = useState('jordan-support-lead')
   const [personaId, setPersonaId] = useState('')
+  const [loginPersonaId, setLoginPersonaId] = useState('')
+  const [signedIn, setSignedIn] = useState(false)
   const [question, setQuestion] = useState('')
   const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null)
-  const [preview, setPreview] = useState<KnowledgeRetrievalPreview | null>(null)
   const [answer, setAnswer] = useState<KnowledgeAnswerResult | null>(null)
   const [previousTurns, setPreviousTurns] = useState<KnowledgeAnswerResult[]>([])
   const [liveSteps, setLiveSteps] = useState<KnowledgeStep[]>([])
@@ -102,9 +131,9 @@ export default function KnowledgeRetrievalPreview() {
   const progressItems = taskTrail(workflowSteps, describeKnowledgeStep)
 
   useEffect(() => {
-    if (!answer && !submittedQuestion) return
     const transcript = transcriptRef.current
-    if (transcript) transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' })
+    if (!transcript) return
+    if (answer || submittedQuestion) transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'smooth' })
   }, [answer, submittedQuestion])
 
   useEffect(() => {
@@ -112,7 +141,7 @@ export default function KnowledgeRetrievalPreview() {
     Promise.all([getKnowledgePersonas(), getKnowledgeIndexStatus(), getKnowledgeApprovers()]).then(([items, status, approverList]) => {
       if (!active) return
       setPersonas(items)
-      setPersonaId((current) => current || items[0]?.persona_id || '')
+      setLoginPersonaId((current) => current || items[0]?.persona_id || '')
       setIndexStatus(status)
       setApprovers(approverList)
     }).catch((cause: unknown) => {
@@ -134,6 +163,8 @@ export default function KnowledgeRetrievalPreview() {
       setAnswer(saved)
       setPreviousTurns([])
       setPersonaId(saved.request.persona_id)
+      setLoginPersonaId(saved.request.persona_id)
+      setSignedIn(true)
       setQuestion('')
       setSubmittedQuestion(saved.request.question)
     }).catch((cause: unknown) => {
@@ -144,32 +175,16 @@ export default function KnowledgeRetrievalPreview() {
 
   const reset = () => {
     requestSequence.current += 1
-    setPreview(null)
     setAnswer(null)
     setPreviousTurns([])
     setSubmittedQuestion(null)
+    setQuestion('')
     setLiveSteps([])
     setRunUrl(null)
     setError('')
     setLoading(false)
-  }
-
-  const runPreview = async () => {
-    const sequence = ++requestSequence.current
-    if (!answer) setSubmittedQuestion(question.trim())
-    setLoading(true)
-    setError('')
-    setPreview(null)
-    setLiveSteps([])
-    setRunUrl(null)
-    try {
-      const result = await previewKnowledgeRetrieval(personaId, question)
-      if (sequence === requestSequence.current) setPreview(result)
-    } catch (cause) {
-      if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : 'Preview failed')
-    } finally {
-      if (sequence === requestSequence.current) setLoading(false)
-    }
+    setSignedIn(false)
+    setLoginPersonaId(personaId)
   }
 
   const runAnswer = async (questionOverride?: string) => {
@@ -183,11 +198,19 @@ export default function KnowledgeRetrievalPreview() {
     setLoading(true)
     setError('')
     setAnswer(null)
-    setPreview(null)
     setLiveSteps([])
     setRunUrl(runId)
     try {
-      const completed = await streamKnowledgeAnswer(personaId, submitted, runId, (step) => {
+      const priorAnswers = previousTurns.length > 0
+        ? previousTurns
+        : answer?.request.conversation_context ?? []
+      const conversationContext = [
+        ...priorAnswers.flatMap((turn) => 'run_id' in turn
+          ? (answerContext(turn) ? [answerContext(turn)!] : [])
+          : [turn]),
+        ...(answer ? (answerContext(answer) ? [answerContext(answer)!] : []) : []),
+      ].slice(-6)
+      const completed = await streamKnowledgeAnswer(personaId, submitted, runId, conversationContext, (step) => {
         if (sequence === requestSequence.current) setLiveSteps((previous) => [...previous, step])
       })
       if (sequence === requestSequence.current) {
@@ -213,8 +236,9 @@ export default function KnowledgeRetrievalPreview() {
       setAnswer(saved)
       setPreviousTurns([])
       setLiveSteps([])
-      setPreview(null)
       setPersonaId(saved.request.persona_id)
+      setLoginPersonaId(saved.request.persona_id)
+      setSignedIn(true)
       setQuestion('')
       setSubmittedQuestion(saved.request.question)
       setRunUrl(runId)
@@ -228,7 +252,6 @@ export default function KnowledgeRetrievalPreview() {
   const buildIndex = async () => {
     setLoading(true)
     setError('')
-    setPreview(null)
     try {
       const report = await buildKnowledgeMockIndex()
       setBuildReport(report)
@@ -261,6 +284,40 @@ export default function KnowledgeRetrievalPreview() {
 
   return (
     <>
+    {!signedIn && <section className="knowledge-login" aria-label="Choose demo persona">
+      <div className="knowledge-login-card">
+        <span className="knowledge-chat-mark" aria-hidden="true">KB</span>
+        <p className="section-kicker">Internal assistant</p>
+        <h2>Sign in to the knowledge base</h2>
+        <p>Choose a demo role to see the policies and documents available to that persona.</p>
+        <form onSubmit={(event) => {
+          event.preventDefault()
+          if (!loginPersonaId || !indexStatus?.ready) return
+          setPersonaId(loginPersonaId)
+          setSignedIn(true)
+          setError('')
+        }}>
+          <label htmlFor="knowledge-login-persona">Sign in as</label>
+          <select id="knowledge-login-persona" value={loginPersonaId} onChange={(event) => setLoginPersonaId(event.target.value)} disabled={!personas.length}>
+            {personas.map((item) => <option key={item.persona_id} value={item.persona_id}>{item.label}</option>)}
+          </select>
+          <p className="knowledge-login-demo-note">Demo sign-in only · this does not authenticate a real user.</p>
+          {!indexStatus?.ready && <p className="knowledge-login-error">Build the fixture index before opening a chat.</p>}
+          {error && <p className="knowledge-login-error" role="alert">{error}</p>}
+          {!indexStatus?.ready && <button type="button" className="knowledge-login-build" onClick={() => { void buildIndex() }} disabled={loading}>{loading ? 'Building index…' : 'Build mock fixture index'}</button>}
+          <button className="primary-button" type="submit" disabled={!personas.length || !loginPersonaId || !indexStatus?.ready}>Continue</button>
+        </form>
+        {savedAnswers.length > 0 && <div className="knowledge-login-saved">
+          <label htmlFor="knowledge-saved-chat">Or reopen a saved chat</label>
+          <select id="knowledge-saved-chat" defaultValue="" onChange={(event) => { if (event.target.value) void selectSavedAnswer(event.target.value) }} disabled={loading}>
+            <option value="">Choose a saved chat…</option>
+            {savedAnswers.map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.question}</option>)}
+          </select>
+        </div>}
+      </div>
+    </section>}
+
+    {signedIn && <>
     <section className="knowledge-chat" aria-label="Internal knowledge assistant">
       <header className="knowledge-chat-header">
         <div className="knowledge-chat-heading">
@@ -272,17 +329,13 @@ export default function KnowledgeRetrievalPreview() {
           </div>
         </div>
         <div className="knowledge-chat-controls">
-          <label>
-            <span>Answer as</span>
-            <select value={personaId} onChange={(event) => { reset(); setPersonaId(event.target.value) }} disabled={!personas.length || loading}>
-              {personas.map((item) => <option key={item.persona_id} value={item.persona_id}>{item.label}</option>)}
-            </select>
-          </label>
+          <button type="button" className="knowledge-new-chat-button" onClick={reset} aria-label="Start a new chat">New chat</button>
+          <span className="knowledge-chat-identity">Signed in as <strong>{personas.find((item) => item.persona_id === personaId)?.label ?? 'Demo user'}</strong></span>
           {savedAnswers.length > 0 && <label>
             <span>Saved chats</span>
             <select value={answer?.run_id ?? ''} onChange={(event) => { if (event.target.value) void selectSavedAnswer(event.target.value) }} disabled={loading}>
               <option value="">Recent conversations</option>
-              {savedAnswers.map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.question} · {item.stop_reason.replaceAll('_', ' ')}</option>)}
+              {savedAnswers.filter((item) => item.persona_id === personaId).map((item) => <option key={item.run_id} value={item.run_id}>{new Date(item.created_at).toLocaleString()} · {item.question} · {item.stop_reason.replaceAll('_', ' ')}</option>)}
             </select>
           </label>}
         </div>
@@ -303,12 +356,12 @@ export default function KnowledgeRetrievalPreview() {
       {error && <p className="knowledge-chat-error" role="alert">{error}</p>}
 
       <div className="knowledge-chat-transcript" aria-live="polite" ref={transcriptRef}>
-        {!transcriptQuestion && !preview && !loading && liveSteps.length === 0 && <div className="knowledge-chat-welcome">
+        {!transcriptQuestion && !loading && liveSteps.length === 0 && <div className="knowledge-chat-welcome">
           <span className="knowledge-chat-welcome-mark" aria-hidden="true">KB</span>
           <h3>What can I help you find?</h3>
           <p>Ask about a policy, process, or support case. I’ll answer from passages this persona is allowed to read.</p>
-          <div className="knowledge-chat-suggestions" aria-label="Suggested questions">
-            {['How do I request time off?', 'What happens to a customer refund request?'].map((suggestion) => <button key={suggestion} type="button" disabled={loading || !indexStatus?.ready || !personaId} onClick={() => { void runAnswer(suggestion) }}>{suggestion}</button>)}
+          <div className="knowledge-chat-suggestions" aria-label={`Suggested questions for ${personas.find((item) => item.persona_id === personaId)?.label ?? 'this role'}`}>
+            {(ROLE_SUGGESTIONS[personaId] ?? ['How do I request time off?', 'What security steps should I follow?']).map((suggestion) => <button key={suggestion} type="button" disabled={loading || !indexStatus?.ready || !personaId} onClick={() => { void runAnswer(suggestion) }}>{suggestion}</button>)}
           </div>
         </div>}
 
@@ -327,7 +380,7 @@ export default function KnowledgeRetrievalPreview() {
           </div>
           {loading && progressItems.length > 0 && <TaskScroll items={progressItems} active className="knowledge-chat-progress" />}
           {loading && !answer && <p className="knowledge-chat-thinking">Checking authorized sources and citations…</p>}
-          {answer && <KnowledgeClaims answer={answer} />}
+        {answer && <KnowledgeClaims answer={answer} />}
           {answer?.available_actions.includes('support_follow_up') && !answer.action_proposal && <section className="knowledge-follow-up-suggestion" aria-label="Suggested follow-up action">
             <div><strong>Need a next step?</strong><span>I can prepare a support follow-up from the cited ticket. You’ll review it before anything is created.</span></div>
             <button type="button" disabled={loading || !followUpEvidence} onClick={() => {
@@ -344,8 +397,8 @@ export default function KnowledgeRetrievalPreview() {
               <label><span>Approver</span><select value={approverId} onChange={(event) => setApproverId(event.target.value)} disabled={loading}>{approvers.map((item) => <option key={item.approver_id} value={item.approver_id}>{item.label}</option>)}</select></label>
               <div className="knowledge-action-buttons"><button type="button" className="primary-button" disabled={loading} onClick={() => { void decideAction('approve') }}>Approve task</button><button type="button" className="knowledge-reject-button" disabled={loading} onClick={() => { void decideAction('reject') }}>Reject</button></div>
             </div>}
-            {answer.mock_task && <p className="knowledge-preview-meta" role="status">Created mock task {answer.mock_task.task_id} · {answer.mock_task.status} · {answer.mock_task.source_id}</p>}
-            <p className="knowledge-preview-meta">Demo approval only · no external task system</p>
+            {answer.mock_task && <p className="knowledge-run-meta" role="status">Created mock task {answer.mock_task.task_id} · {answer.mock_task.status} · {answer.mock_task.source_id}</p>}
+            <p className="knowledge-run-meta">Demo approval only · no external task system</p>
           </section>}
           {answer && answer.claims.length === 0 && !answer.action_proposal && <p className="knowledge-answer-abstain">{answerView?.message}</p>}
           {answer && <div className="knowledge-answer-footer">{answer.fixture_version && <>Fixture {answer.fixture_version} · {answer.embedding_model} · </>}{answer.authorized_source_ids.length} authorized sources</div>}
@@ -360,13 +413,12 @@ export default function KnowledgeRetrievalPreview() {
           maxLength={500}
           rows={2}
           placeholder="Ask a question about a policy, process, or support case…"
-          onChange={(event) => { setPreview(null); setQuestion(event.target.value) }}
+          onChange={(event) => { setQuestion(event.target.value) }}
           onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void runAnswer() } }}
         />
         <div className="knowledge-composer-footer">
           <span>Enter to send · Shift+Enter for a new line</span>
           <div>
-            <button type="button" className="knowledge-inspect-button" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()} onClick={() => { void runPreview() }}>Inspect retrieval</button>
             <button className="primary-button" type="submit" disabled={loading || !indexStatus?.ready || !personaId || !question.trim()}>{loading ? 'Working…' : 'Send'}</button>
           </div>
         </div>
@@ -387,17 +439,7 @@ export default function KnowledgeRetrievalPreview() {
       {answer && <details className="knowledge-answer-walkthrough"><summary>Verification and usage</summary><pre>{JSON.stringify({ verification: answer.verification, usage: answer.usage }, null, 2)}</pre></details>}
     </section>}
 
-    {preview && <section className="knowledge-preview-result" aria-label="Retrieval inspection">
-      <p className="knowledge-preview-meta">Retrieval inspection · {preview.fixture_version} · {preview.embedding_model}</p>
-      <ol className="knowledge-preview-steps">{preview.steps.map((step) => <li key={step.stage}><strong>{step.stage.replaceAll('_', ' ')}</strong><p>{step.detail}</p>{step.source_ids.length > 0 && <code>{step.source_ids.join(' · ')}</code>}</li>)}</ol>
-      <div className="knowledge-candidates">
-        <div><h3>Keyword candidates</h3>{preview.lexical_candidates.length ? preview.lexical_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
-        <div><h3>Vector candidates</h3>{preview.vector_candidates.length ? preview.vector_candidates.map((item) => <code key={item.chunk_id}>{item.rank}. {item.chunk_id} · {item.score.toFixed(3)}</code>) : <p>No candidates</p>}</div>
-      </div>
-      <h3>Ranked authorized excerpts</h3>
-      {preview.ranked_excerpts.length === 0 && <p>No authorized source matched this question.</p>}
-      {preview.ranked_excerpts.map((item) => <article className="knowledge-preview-source" key={item.chunk_id}><div><strong>{item.title}</strong><span>{item.kind} · keyword #{item.lexical_rank ?? '—'} · vector #{item.vector_rank ?? '—'}</span></div><blockquote>{item.excerpt}</blockquote><code>{item.locator.source_id}@{item.locator.revision}:{item.locator.start}-{item.locator.end}</code></article>)}
-    </section>}
+    </>}
     </>
   )
 }

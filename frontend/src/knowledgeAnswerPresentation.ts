@@ -19,7 +19,7 @@ export function presentKnowledgeAnswer(answer: KnowledgeAnswerResult) {
       ? 'Answer'
       : answer.stop_reason.replaceAll('_', ' ')
   const messages: Record<string, string> = {
-    read_only_action_request: 'This read-only demo cannot perform an action.',
+    read_only_action_request: 'That action is not supported. This demo can prepare only an approved support follow-up from authorized ticket evidence.',
     action_proposal_pending: 'Review the proposed support follow-up and approve or reject it below. No task exists yet.',
     action_proposal_rejected: 'The authorized approver rejected this proposal.',
     action_policy_blocked: 'Policy blocked the action because requester access, evidence, or source state did not pass checks.',

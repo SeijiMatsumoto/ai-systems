@@ -1,0 +1,182 @@
+{
+  "version": "knowledge-retrieval-eval-v3",
+  "cases": [
+    {
+      "persona_id": "alex",
+      "question": "How do I request time off?",
+      "expected_source_ids": [
+        "policy-leave-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "How much PTO is left?",
+      "expected_source_ids": [
+        "policy-leave-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "How do I cancel approved leave?",
+      "expected_source_ids": [
+        "policy-leave-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What happens to a customer refund request?",
+      "expected_source_ids": [
+        "ticket-support-214"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What charge details does the specialist collect for a refund?",
+      "expected_source_ids": [
+        "ticket-support-214"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "How does the on-call rotation handoff work?",
+      "expected_source_ids": [
+        "doc-engineering-rotation"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "When is the secondary notified about an unacknowledged page?",
+      "expected_source_ids": [
+        "doc-engineering-rotation"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What does the deployment pipeline require?",
+      "expected_source_ids": [
+        "doc-engineering-injection"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What should happen if the staging smoke check fails?",
+      "expected_source_ids": [
+        "doc-engineering-injection"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What happens to a customer refund request?",
+      "expected_source_ids": []
+    },
+    {
+      "persona_id": "alex",
+      "question": "Who acknowledges production pages?",
+      "expected_source_ids": []
+    },
+    {
+      "persona_id": "alex",
+      "question": "Who manages payroll taxes?",
+      "expected_source_ids": []
+    },
+    {
+      "persona_id": "alex",
+      "question": "What receipts do I need for an approved business expense claim?",
+      "expected_source_ids": [
+        "policy-expenses-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What should I do if a receipt is missing?",
+      "expected_source_ids": [
+        "policy-expenses-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "How do I report a suspicious email?",
+      "expected_source_ids": [
+        "policy-security-v1"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What is the process for a lost or compromised device?",
+      "expected_source_ids": [
+        "policy-security-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What should I finish during my first week?",
+      "expected_source_ids": [
+        "doc-onboarding-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What if my new hire account is not ready?",
+      "expected_source_ids": [
+        "doc-onboarding-v1"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What should support do when a shipment is late?",
+      "expected_source_ids": [
+        "ticket-support-288"
+      ]
+    },
+    {
+      "persona_id": "alex",
+      "question": "What happens after a replacement is approved?",
+      "expected_source_ids": [
+        "ticket-support-288"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What needs to pass before a production release?",
+      "expected_source_ids": [
+        "doc-engineering-release-v1"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "When should we roll back a deployment?",
+      "expected_source_ids": [
+        "doc-engineering-release-v1"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What details belong in an incident handoff?",
+      "expected_source_ids": [
+        "doc-engineering-observability-v1"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "Should responders record customer impact separately from suspected causes?",
+      "expected_source_ids": [
+        "doc-engineering-observability-v1"
+      ]
+    },
+    {
+      "persona_id": "morgan",
+      "question": "What happens to a customer refund request?",
+      "expected_source_ids": []
+    },
+    {
+      "persona_id": "alex",
+      "question": "How do I deploy the service release?",
+      "expected_source_ids": []
+    },
+    {
+      "persona_id": "alex",
+      "question": "What is the office mailing address?",
+      "expected_source_ids": []
+    }
+  ]
+}

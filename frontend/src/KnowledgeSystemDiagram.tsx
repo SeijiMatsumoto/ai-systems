@@ -1,29 +1,29 @@
 const stages = [
   {
-    label: '01 · Indexing · implemented with mock embeddings',
+    label: '01 · Ingest and index · implemented',
     nodes: [
-      ['Sources', 'Versioned docs · tickets · policies'],
-      ['Parse + chunk', 'Exact source offsets'],
-      ['Embed changes', 'Model + content version'],
-      ['Local index', 'Text · vectors · ACL metadata'],
+      ['Synthetic sources', 'Policies · documents · support tickets'],
+      ['Parse + chunk', 'Versioned text · exact source offsets'],
+      ['Embed changes', 'Content hash · embedding model version'],
+      ['Local index', 'Vectors · text · server-owned ACLs'],
     ],
   },
   {
-    label: '02 · Request + intent · implemented',
+    label: '02 · Check request and classify intent · implemented',
     nodes: [
-      ['Request checks', 'Schema · length · normalization'],
-      ['Action signals', 'Deterministic keyword patterns'],
-      ['Jev intent', 'Only when signals are present'],
-      ['App threshold', 'Read-only answer or action branch'],
+      ['Deterministic checks', 'Validate · normalize · bound input'],
+      ['Action signals', 'Keyword patterns before model calls'],
+      ['Jev intent', 'Runs only when action signals are present'],
+      ['App decision', 'Threshold chooses answer or action path'],
     ],
   },
   {
-    label: '03 · ACL retrieval · implemented',
+    label: '03 · Retrieve authorized evidence · implemented',
     nodes: [
-      ['Access scope', 'Server-owned persona groups'],
-      ['Hybrid search', 'Lexical + vector on allowed chunks'],
-      ['Fusion + rerank', 'Exact citable excerpts'],
-      ['Read-only answer', 'Typed claims · provenance · Jev'],
+      ['Resolve access', 'Server-owned persona groups'],
+      ['Lexical search', 'BM25-style term scoring'],
+      ['Vector search', 'Query embedding · authorized vectors only'],
+      ['Fuse + rerank', 'Bounded candidates · exact excerpts'],
     ],
   },
 ]
@@ -38,25 +38,28 @@ function FlowRow({ nodes }: { nodes: string[][] }) {
 }
 
 export default function KnowledgeSystemDiagram() {
-  return <div className="knowledge-architecture" role="region" aria-label="Knowledge and Action architecture">
+  return <div className="knowledge-architecture" role="region" aria-label="Internal Knowledge and Action architecture">
     {stages.map((stage) => <section className="knowledge-architecture-stage" key={stage.label}>
       <h3>{stage.label}</h3>
       <FlowRow nodes={stage.nodes} />
     </section>)}
+
     <section className="knowledge-architecture-stage">
-      <h3>Read-only branch · implemented</h3>
+      <h3>04 · Answer path · implemented</h3>
       <div className="knowledge-architecture-split">
-        <div><strong>Selected passages → typed Markdown claims → citation provenance</strong><small>Only authorized, frozen excerpts reach the model. Answers support paragraphs, bullets, and numbered steps.</small></div>
-        <div><strong>Deterministic citation checks → Jev grounding → saved answer</strong><small>Citation chips remain attached to claims; rejected or unsupported claims abstain.</small></div>
+        <div><strong>Selected passages → typed answer claims</strong><small>The answer model receives only the current question, bounded conversation context, and ACL-authorized excerpts. Prior answers help resolve follow-ups but are not evidence.</small></div>
+        <div><strong>Deterministic citation checks → Jev grounding → saved answer</strong><small>Application code verifies evidence IDs and exact locators first. Jev then checks claim support; unsupported or unverified answers abstain. The answer and ordered workflow are saved to the shared run history.</small></div>
       </div>
     </section>
+
     <section className="knowledge-architecture-stage">
-      <h3>04 · Approval-gated action · implemented</h3>
+      <h3>05 · Action path · implemented</h3>
       <div className="knowledge-architecture-split">
-        <div><strong>Keyword signals → Jev intent → ACL-scoped ticket → typed proposal</strong><small>Deterministic request checks precede Jev. The proposal model sees only authorized support-ticket evidence and cannot create a task.</small></div>
-        <div><strong>Approver check → execution-time policy recheck → idempotent local task</strong><small>One synthetic support-follow-up type; denied, stale, rejected, and repeated decisions are saved.</small></div>
+        <div><strong>Positive intent → authorized ticket evidence → typed proposal</strong><small>Only the supported follow-up action is available. The proposal model receives authorized support-ticket passages and cannot execute a task.</small></div>
+        <div><strong>Simulated approval → policy recheck → idempotent mock task</strong><small>Application policy checks the approver, requester scope, action type, and evidence again at execution. Writes stay in the local demo database; no external task system is called.</small></div>
       </div>
     </section>
-    <p className="knowledge-architecture-footnote">Both retrieval paths use the same ACL scope before candidate scoring. Mock embedding evals exercise the wiring; real-model retrieval quality remains unverified.</p>
+
+    <p className="knowledge-architecture-footnote">The persona picker demonstrates identity selection; it is not real authentication. Both search paths apply ACLs before candidate scoring. The default mock embeddings verify wiring, not semantic retrieval quality.</p>
   </div>
 }

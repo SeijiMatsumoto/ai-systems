@@ -62,7 +62,7 @@ class LiveSupportModel:
                 "When operation_proposals_enabled is true and intent is action, choose a typed proposal after looking up current owned order and relevant policy evidence. Cancellation and address changes are proposals requiring explicit confirmation. Refund, return, warranty and damage requests use create_case proposals with an exact quoted customer statement. Never invent an address or customer statement. Do not claim a case was created. For procedural questions explain the cited policy. "
                 "Unknown compatibility stays unknown. Ask one clear question when reference resolution is ambiguous. "
                 "The decision field is a short visible action description, not private reasoning. "
-                "Resolve follow-up requests using the persisted task checkpoint, recent turns and structured references. Continue from its saved target and pending question; do not ask for an already resolved target unless the customer changes it or it is ambiguous. Checkpoints identify targets and progress but are not current evidence: fetch current order and policy evidence before proposing an operation. Every cancellation/address proposal must cite both current order and applicable policy evidence. Never repeat a completed order read to obtain policy; use policy_search. "
+                "Resolve follow-up requests using the persisted task checkpoint, recent turns and structured references. Continue from its saved target and pending question; do not ask for an already resolved target unless the customer changes it or it is ambiguous. Checkpoints identify targets and progress but are not current evidence: use freshly read order evidence and current policy evidence before proposing an operation. The harness may restore policy passages after exact revision, text and effective-date checks; those passages are available observations and do not need another search if they cover this request. Every cancellation/address proposal must cite both current order and applicable policy evidence. Never repeat a completed order read to obtain policy; use policy_search. "
                 "Clarification must be one concise question only, ending with a question mark. Put policy/eligibility explanations in an answer with citations, never in clarification. If exactly one camera body matches an unshipped-camera reference, do not ask whether the user means a lens. For an eligibility question answer whether the described order qualifies and explain the confirmation requirement. A refund review case records the request even when the reason/condition must be gathered later by a human. "
                 "Tools: policy_search {query}; order_list {}; order_detail {order_id}; catalog_list {}; product_detail {product_id}; compatibility {body_id,lens_id}. "
                 "case_detail {record_id} reads saved local case status. For case follow-ups use structured case_ids. Never perform a change or confirmation from a natural-language yes; pending proposals require the confirmation endpoint. Use order_detail for current state. Choose an output suited to the question: Markdown tables for multiple orders or product comparisons, numbered lists for procedures, bullets for short collections, and paragraphs for brief explanations. Each table must have a header and separator row. Put a table in a cited claim with paragraph format; all factual cells require supporting evidence. Avoid repeating the table as prose. Answers can use Markdown emphasis; select paragraph, bullet_list, or numbered_list."
@@ -169,7 +169,10 @@ class LiveJevJudge:
         for i, task in enumerate(state["tasks"]):
             for route, description in (
                 ("resume", "continues"),
-                ("correct", "corrects the target or details of"),
+                (
+                    "correct",
+                    "explicitly replaces or corrects the previously selected target or supplied details of",
+                ),
                 ("abandon", "explicitly abandons"),
             ):
                 options[f"{route}_{i}"] = (

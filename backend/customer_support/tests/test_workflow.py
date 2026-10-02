@@ -253,7 +253,12 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             question="Summarize the details of all my orders.",
         )
         self.assertEqual(result.disposition, "answered")
-        self.assertEqual(result.steps[5].details["usage"]["cost"], "0.0003452")
+        self.assertEqual(
+            next(step for step in result.steps if step.stage == "model_output").details[
+                "usage"
+            ]["cost"],
+            "0.0003452",
+        )
         self.assertNotIn("failure", [step.stage for step in result.steps])
 
     async def test_noncompliant_provider_cannot_execute_completed_order_read(self):

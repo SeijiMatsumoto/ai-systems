@@ -55,6 +55,300 @@ def require_row(db: Session, model: type[Row], key: object) -> Row:
 
 
 class ActionTests(test_workflow.ApiTests):
+    def test_eligibility_then_varied_order_followups_use_saved_target(self):
+        listed = self.send("What are my orders?")
+        self.assertEqual(
+            len([item for item in listed["evidence"] if item["kind"] == "order"]), 5
+        )
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+        self.runtime.judge.route_decision = TaskRoute(route="clarify", probability=0.77)
+
+        def eligibility(state):
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            return answer(
+                "Your Canon EOS R50 order is paid and unfulfilled.",
+                tuple(item["evidence_id"] for item in evidence),
+            )
+
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            tool("policy_search", query="cancellation"),
+            eligibility,
+        ]
+        first = self.send("can i cancel the canon EOS r50?")
+        self.assertEqual(first["stop_reason"], "verified")
+        prompts = (
+            ("How much was that order?", "The item total was $500."),
+            ("How much did it cost?", "The item total was $500."),
+            ("how much did I pay for that?", "The item total was $500."),
+            ("Has that shipped yet?", "Your order is unfulfilled and has not shipped."),
+            ("When was that order placed?", "Your order was placed on 2026-09-30."),
+            ("Where is that order?", "Your order is unfulfilled."),
+            (
+                "Has that order shipped yet?",
+                "Your order is unfulfilled and has not shipped.",
+            ),
+            ("What items are in this order?", "Your order contains one Canon EOS R50."),
+            ("Is that order paid?", "Your order is paid."),
+            (
+                "What is the status of the same order?",
+                "Your order is paid and unfulfilled.",
+            ),
+        )
+        for prompt, text in prompts:
+            with self.subTest(prompt=prompt):
+
+                def followup(state, text=text):
+                    self.assertEqual(
+                        state["references"]["owned_order_ids"], ["order-1001"]
+                    )
+                    evidence = [
+                        item
+                        for entry in state["observations"]
+                        for item in entry["results"]
+                        if item.get("kind") == "order"
+                    ]
+                    self.assertEqual(len(evidence), 1)
+                    self.assertEqual(evidence[0]["source_id"], "order-1001")
+                    return answer(text, (evidence[0]["evidence_id"],))
+
+                self.model.script = [followup]
+                before = len(self.model.calls)
+                result = self.send(prompt)
+                self.assertEqual(result["stop_reason"], "verified")
+                self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+                self.assertEqual(len(self.model.calls), before + 1)
+                self.assertEqual(result["answer"], text)
+                self.assertIsNone(result["pending_action"])
+                self.assertIsNone(result["review_case"])
+        self.assertFalse(
+            any(name == "continuation" for name, _ in self.runtime.judge.calls)
+        )
+
+    def test_eligibility_then_policy_question_preserves_exact_task(self):
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+        # Make the semantic router fail if called: this reference is deterministic.
+        self.runtime.judge.route_decision = TaskRoute(route="clarify", probability=0.95)
+
+        def eligibility(state):
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            return answer(
+                "Your Canon EOS R50 is unfulfilled and qualifies for cancellation with confirmation.",
+                tuple(item["evidence_id"] for item in evidence),
+            )
+
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            tool("policy_search", query="cancellation"),
+            eligibility,
+        ]
+        first = self.send("Can I cancel my unshipped camera order?")
+        self.assertEqual(first["stop_reason"], "verified")
+        self.assertEqual(first["task"]["selected_order_ids"], ["order-1001"])
+
+        def policy_answer(state):
+            self.assertEqual(state["references"]["owned_order_ids"], ["order-1001"])
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if item.get("kind") == "policy"
+            ]
+            self.assertTrue(evidence)
+            return answer(
+                "Cancellation requires a paid, unfulfilled order and your confirmation.",
+                tuple(item["evidence_id"] for item in evidence),
+            )
+
+        self.model.script = [policy_answer]
+        result = self.send("What does the cancellation policy require for that order?")
+        self.assertEqual(result["stop_reason"], "verified")
+        self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+        self.assertIsNone(result["pending_action"])
+        self.assertFalse(
+            any(name == "continuation" for name, _ in self.runtime.judge.calls)
+        )
+        self.assertEqual(
+            [
+                step["details"]["name"]
+                for step in result["steps"]
+                if step["stage"] == "tool_request"
+            ],
+            ["order_detail"],
+        )
+
+    def test_followup_reuses_policy_but_refreshes_order_and_accumulates_resources(self):
+        first = self.propose()
+        task_id = first["task"]["task_id"]
+        self.assertTrue(first["task"]["saved_policy"])
+        # Recreate the repository to ensure reuse comes from persistence.
+        self.repo = SupportRepository(self.repo.session_factory)
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+
+        def explanation(state):
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            self.assertTrue(any(item["kind"] == "order" for item in evidence))
+            return answer(
+                "Your unfulfilled order can be cancelled after confirmation.",
+                tuple(item["evidence_id"] for item in evidence),
+            )
+
+        self.model.script = [explanation]
+        result = self.send("Can I cancel that order under the policy?")
+        self.assertEqual(result["stop_reason"], "verified")
+        self.assertEqual(result["task"]["task_id"], task_id)
+        requests = [
+            step["details"]["name"]
+            for step in result["steps"]
+            if step["stage"] == "tool_request"
+        ]
+        self.assertEqual(requests, ["order_detail"])
+        reuse = next(
+            step for step in result["steps"] if step["stage"] == "policy_reuse_check"
+        )
+        self.assertTrue(reuse["details"]["reused"])
+        self.assertEqual(
+            reuse["details"]["reused"][0]["source_run_id"], first["run_id"]
+        )
+        self.assertEqual(result["task"]["resources"]["executions"], 2)
+        self.assertEqual(
+            result["task"]["resources"]["tokens"],
+            first["task"]["resources"]["tokens"]
+            + sum(
+                value.get("input_tokens", 0) + value.get("output_tokens", 0)
+                for value in result["usage"].values()
+            ),
+        )
+        self.assertEqual(
+            result["task"]["resources"]["tool_calls"],
+            first["task"]["resources"]["tool_calls"] + 1,
+        )
+
+    def test_reused_policy_never_reuses_mutable_order_state(self):
+        self.propose()
+        with Session(self.engine) as db, db.begin():
+            row = require_row(db, SupportOrder, "order-1001")
+            payload = copy.deepcopy(row.payload)
+            payload["fulfillment"] = "shipped"
+            row.payload = payload
+            row.version += 1
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+
+        def current_answer(state):
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            order = next(item for item in evidence if item["kind"] == "order")
+            import json
+
+            self.assertEqual(json.loads(order["text"])["fulfillment"], "shipped")
+            return answer("Your order has shipped.", (order["evidence_id"],))
+
+        self.model.script = [current_answer]
+        result = self.send("Can I cancel that order under the policy?")
+        self.assertEqual(result["stop_reason"], "verified")
+
+    def test_stale_policy_is_invalidated_before_followup_answer(self):
+        from backend.customer_support.retrieval import ingest
+
+        first = self.propose()
+        policies = tuple(
+            p.model_copy(update={"revision": "revised-policy"})
+            for p in self.store.fixture.policies
+        )
+        self.store.fixture = self.store.fixture.model_copy(
+            update={"policies": policies}
+        )
+        self.runtime.index = ingest(self.store, self.runtime.embedder)
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+
+        def explanation(state):
+            evidence = [
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if "evidence_id" in item
+            ]
+            policy = [item for item in evidence if item["kind"] == "policy"]
+            self.assertTrue(policy)
+            self.assertTrue(
+                all(item["locator"].startswith("revised-policy:") for item in policy)
+            )
+            return answer(
+                "Cancellation requires confirmation.",
+                tuple(item["evidence_id"] for item in policy),
+            )
+
+        self.model.script = [tool("policy_search", query="cancellation"), explanation]
+        result = self.send("Can I cancel that order under the policy?")
+        self.assertEqual(result["stop_reason"], "verified")
+        reuse = next(
+            step for step in result["steps"] if step["stage"] == "policy_reuse_check"
+        )
+        self.assertEqual(reuse["details"]["reused"], [])
+        self.assertTrue(reuse["details"]["invalidated"])
+        self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+
+    def test_failed_provider_usage_is_charged_to_same_task(self):
+        from backend.customer_support.providers import ModelBoundaryFailure
+
+        first = self.propose()
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+        self.model.script = [
+            ModelBoundaryFailure(
+                "ValidationError",
+                "bad response",
+                {"input_tokens": 500, "output_tokens": 30},
+                [],
+            )
+        ]
+        result = self.send("Can I cancel that order under the policy?")
+        self.assertEqual(result["stop_reason"], "provider_or_validation_failure")
+        self.assertIsNone(result["review_case"])
+        self.assertEqual(
+            result["task"]["resources"]["tokens"],
+            first["task"]["resources"]["tokens"] + 572,
+        )
+        self.assertEqual(result["task"]["resources"]["executions"], 2)
+
+    def test_exhausted_task_blocks_models_but_specific_confirmation_still_works(self):
+        first = self.propose()
+        with Session(self.engine) as db, db.begin():
+            row = require_row(db, SupportTask, UUID(first["task"]["task_id"]))
+            checkpoint = copy.deepcopy(row.checkpoint)
+            checkpoint["resources"] = {
+                "executions": 12,
+                "tokens": 60000,
+                "tool_calls": 24,
+            }
+            row.checkpoint = checkpoint
+        before = len(self.model.calls)
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+        result = self.send("Can I cancel that order under the policy?")
+        self.assertEqual(result["stop_reason"], "task_resource_budget")
+        self.assertEqual(len(self.model.calls), before)
+        self.assertEqual(self.runtime.judge.calls, [])
+        self.assertIsNone(result["review_case"])
+        self.assertEqual(self.decide(first).status_code, 200)
+
     def test_routing_timeout_preserves_tasks_and_saves_failure_without_case(self):
         first = self.propose()
         second = self.propose(

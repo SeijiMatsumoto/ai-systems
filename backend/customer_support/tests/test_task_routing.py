@@ -152,3 +152,120 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.judge.calls, [])
         self.assertFalse(is_confirmation_reply("What happens if I do it?"))
         self.assertFalse(is_confirmation_reply("Actually cancel the other one"))
+
+    async def test_policy_followups_use_topic_without_creating_action_intent(self):
+        from backend.customer_support.task_routing import kind_signal
+
+        history = [
+            ConversationTurn(
+                question="Can I cancel my unshipped camera order?",
+                answer="The R50 qualifies",
+                task_id=self.cancel.task_id,
+            )
+        ]
+        for text in (
+            "What does the cancellation policy require for that order?",
+            "What are the cancellation rules for this order?",
+            "What is the address policy for that request?",
+        ):
+            topic_task = self.address if "address" in text else self.cancel
+            with self.subTest(text=text):
+                result, state, _ = await self.route(text, [topic_task], history)
+                self.assertEqual(result.task_id, topic_task.task_id)
+                self.assertEqual(result.route, "resume")
+                self.assertIsNone(kind_signal(text))
+                self.assertIsNone(state["task_kind_signal"])
+        self.assertEqual(self.judge.calls, [])
+        result, _, _ = await self.route(
+            "What is your cancellation policy?", [self.cancel], history
+        )
+        self.assertEqual(result.route, "new")
+        self.assertIsNone(result.task_kind)
+
+    async def test_resolved_order_reference_is_independent_of_question_topic(self):
+        task = self.cancel.model_copy(update={"selected_order_ids": ("order-1001",)})
+        history = [
+            ConversationTurn(
+                question="Can I cancel my unshipped camera order?",
+                answer="Your R50 qualifies",
+                task_id=task.task_id,
+                order_ids=task.selected_order_ids,
+            )
+        ]
+        self.judge.route_decision = TaskRoute(route="clarify", probability=0.77)
+        for text in (
+            "How much was that order?",
+            "How much did it cost?",
+            "How much did I pay for that?",
+            "What did that cost?",
+            "Is this paid?",
+            "Has that shipped yet?",
+            "Where is that order?",
+            "When was this order placed?",
+            "What items are in that order?",
+            "Has that order shipped?",
+            "Is that order paid?",
+            "What is the status of the same order?",
+        ):
+            with self.subTest(text=text):
+                result, state, source = await self.route(
+                    text, [task, self.address], history
+                )
+                self.assertEqual(result.task_id, task.task_id)
+                self.assertEqual(source, "resolved_current_entity")
+                self.assertEqual(
+                    state["resolved_current_entity"]["order_ids"], ("order-1001",)
+                )
+        self.assertEqual(self.judge.calls, [])
+
+    async def test_entity_resolver_does_not_guess_ambiguous_or_changed_targets(self):
+        task = self.cancel.model_copy(update={"selected_order_ids": ("order-1001",)})
+        history = [
+            ConversationTurn(
+                question="Cancel",
+                answer="R50",
+                task_id=task.task_id,
+                order_ids=task.selected_order_ids,
+            )
+        ]
+        self.judge.route_decision = TaskRoute(route="clarify", probability=0.77)
+        for text in (
+            "How much was that other order?",
+            "How much was that order, order-1002?",
+            "How much was the earlier order?",
+            "Actually, that order instead",
+        ):
+            _, _, source = await self.route(text, [task], history)
+            self.assertNotEqual(source, "resolved_current_entity")
+        ambiguous = [
+            history[0].model_copy(update={"order_ids": ("order-1001", "order-1002")})
+        ]
+        _, _, source = await self.route("How much was that order?", [task], ambiguous)
+        self.assertNotEqual(source, "resolved_current_entity")
+        unrelated = [
+            *history,
+            ConversationTurn(question="What is your return policy?", answer="Policy"),
+        ]
+        _, _, source = await self.route("How much was that order?", [task], unrelated)
+        self.assertNotEqual(source, "resolved_current_entity")
+
+    async def test_unresolved_routing_reply_does_not_erase_prior_entity(self):
+        task = self.cancel.model_copy(update={"selected_order_ids": ("order-1001",)})
+        history = [
+            ConversationTurn(
+                question="Cancel?",
+                answer="R50",
+                task_id=task.task_id,
+                order_ids=task.selected_order_ids,
+            ),
+            ConversationTurn(
+                question="How much?",
+                answer="Which request?",
+                stop_reason="task_reference_ambiguous",
+            ),
+        ]
+        result, _, source = await self.route(
+            "How much was that order?", [task], history
+        )
+        self.assertEqual(result.task_id, task.task_id)
+        self.assertEqual(source, "resolved_current_entity")

@@ -16,6 +16,7 @@ from backend.db.schemas import (
 
 from .contracts import ConversationTurn, SupportResponse, SupportStep, TaskCheckpoint
 from .store import MockStore
+from .task_resources import resource_totals, saved_policies
 
 
 class ConversationBusy(ValueError):
@@ -83,6 +84,7 @@ class SupportRepository:
                         "version": checkpoint.version + 1,
                         "last_answer": "",
                         "completed_steps": (),
+                        "saved_policy": (),
                     }
                 )
                 row.checkpoint = checkpoint.model_dump(mode="json")
@@ -122,6 +124,10 @@ class SupportRepository:
         checkpoint = saved.model_copy(
             update={
                 "status": status,
+                "resources": resource_totals(
+                    saved.resources, response.usage, response.steps
+                ),
+                "saved_policy": saved_policies(saved.saved_policy, response),
                 "version": saved.version + 1,
                 "selected_order_ids": targets or saved.selected_order_ids,
                 "pending_proposal_id": response.pending_action.proposal_id
@@ -267,6 +273,7 @@ class SupportRepository:
                 context.append(
                     ConversationTurn(
                         task_id=saved.task.task_id if saved.task else None,
+                        stop_reason=saved.stop_reason,
                         question=row.question,
                         answer=saved.answer,
                         case_ids=(saved.review_case.case_id,)

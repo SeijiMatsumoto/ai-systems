@@ -499,6 +499,7 @@ def scoped_decision_envelope(names: tuple[str, ...]) -> type[DecisionEnvelope]:
 
 
 class ConversationTurn(Record):
+    stop_reason: Identifier | None = None
     task_id: Identifier | None = None
     case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
     proposal_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
@@ -534,6 +535,29 @@ class TaskRoute(Record):
         return self
 
 
+class TaskResources(Record):
+    executions: int = Field(default=0, ge=0)
+    tokens: int = Field(default=0, ge=0)
+    tool_calls: int = Field(default=0, ge=0)
+
+
+class TaskResourceLimits(Record):
+    executions: int = Field(default=12, ge=1)
+    tokens: int = Field(default=60000, ge=1)
+    tool_calls: int = Field(default=24, ge=1)
+
+
+class SavedPolicyEvidence(Record):
+    source_run_id: Identifier
+    evidence: Evidence
+
+    @model_validator(mode="after")
+    def policy_only(self):
+        if self.evidence.kind != "policy":
+            raise ValueError("Only policy passages may be reused")
+        return self
+
+
 class TaskCheckpoint(Record):
     task_id: Identifier
     kind: TaskKind = "cancel_order"
@@ -556,6 +580,8 @@ class TaskCheckpoint(Record):
     evidence_run_id: Identifier | None = None
     evidence_ids: tuple[Identifier, ...] = Field(default=(), max_length=30)
     case_ids: tuple[Identifier, ...] = Field(default=(), max_length=10)
+    resources: TaskResources = Field(default_factory=TaskResources)
+    saved_policy: tuple[SavedPolicyEvidence, ...] = Field(default=(), max_length=12)
 
 
 class SupportResponse(Record):

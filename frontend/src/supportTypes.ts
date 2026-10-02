@@ -8,7 +8,7 @@ export interface SupportAction {
 }
 export interface SupportCase { ticket_number?: number | null; case_id: string; category: string; order_id: string | null; customer_statement: string; status: 'pending_review'; human_decision: 'not_decided' }
 export interface SupportResult {
-  task?: { task_id: string; kind: 'cancel_order' | 'change_address' | 'human_review'; status: string; goal: string; selected_order_ids: string[]; pending_proposal_id: string | null; pending_question: string | null; last_answer: string; version: number; case_ids: string[] } | null
+  task?: { task_id: string; kind: 'cancel_order' | 'change_address' | 'human_review'; status: string; goal: string; selected_order_ids: string[]; pending_proposal_id: string | null; pending_question: string | null; last_answer: string; version: number; case_ids: string[]; resources?: { executions: number; tokens: number; tool_calls: number } } | null
   run_id: string; conversation_id: string; disposition: string; answer: string; stop_reason: string
   pending_action: SupportAction | null; review_case: SupportCase | null
   receipt: { proposal_id: string; order_id: string; outcome: string; reason: string; order_version: number; refund_executed: false; case_id: string | null } | null

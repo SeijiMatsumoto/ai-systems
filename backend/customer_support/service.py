@@ -34,6 +34,16 @@ from .contracts import (
 from .providers import Judge, ModelBoundaryFailure, SupportModel
 from .retrieval import IndexUnavailable, PolicyIndex, search
 from .store import CustomerStore, MockStore, review_order
+from .task_resources import (
+    TASK_LIMITS,
+    TaskBudgetReached,
+    bound_proposal_result,
+    ensure_task_budget,
+    remaining_resources,
+    reported_tokens,
+    restore_policy,
+    task_budget_exhausted,
+)
 
 MAX_TURNS = 8
 MAX_TOOL_CALLS = 6
@@ -116,6 +126,96 @@ def render(draft: AnswerDraft) -> str:
     return "\n\n".join(claim.text for claim in draft.claims)
 
 
+def refresh_selected_order(state, customer, order_facts, add, step, tool_limit):
+    if tool_limit == 0:
+        raise TaskBudgetReached("Task lookup limit reached")
+    order_id = state["references"]["owned_order_ids"][0]
+    current = customer.order(order_id).order
+    if current is None:
+        return 0
+    step(
+        "tool_request",
+        name="order_detail",
+        arguments={"order_id": order_id},
+        application_owned=True,
+    )
+    facts = order_facts(current)
+    observation = add(
+        "order", order_id, "current_owned_order_snapshot", json.dumps(facts)
+    )
+    step(
+        "eligibility_check",
+        order_id=order_id,
+        rules=facts["policy_rule_inputs"],
+        result=facts["read_only_review"],
+        execution_authorized=False,
+    )
+    step("tool_result", name="order_detail", observations=[observation])
+    state["observations"].append(
+        {
+            "tool": {"name": "order_detail", "arguments": {"order_id": order_id}},
+            "results": [observation],
+        }
+    )
+    state["tools"].pop("order_detail", None)
+    state["required_evidence"] = (
+        "Current selected order has already been refreshed. Retrieve applicable policy next if needed; reuse this order evidence."
+    )
+    step(
+        "completed_read_check",
+        source="selected_task_order",
+        removed_tools=["order_detail"],
+        reason="current_snapshot_already_available",
+    )
+    return 1
+
+
+def answer_order_list(customer, store, add, catalog, step, finish):
+    step("deterministic_route", route="owned_order_list", model_required=False)
+    step("tool_request", name="order_list", arguments={})
+    orders = customer.orders()
+    evidence_ids = []
+    lines = [
+        "| Ordered | Items | Payment | Delivery |",
+        "| :--- | :--- | :--- | :--- |",
+    ]
+    for order in orders:
+        facts = order.model_dump(mode="json", exclude={"address", "customer_id"})
+        record = add(
+            "order",
+            order.order_id,
+            "current_owned_order_snapshot",
+            json.dumps(facts),
+        )
+        evidence_ids.append(record["evidence_id"])
+        products = ", ".join(
+            f"{line.quantity} × {next((p.name for p in store.fixture.products if p.product_id == line.product_id), line.product_id)}"
+            for line in order.lines
+        )
+        lines.append(
+            f"| {order.placed_on} | {products.replace(chr(124), chr(92) + chr(124))} | {order.state.value.capitalize()} | {order.fulfillment.value.replace('_', ' ').capitalize()} |"
+        )
+    step(
+        "tool_result",
+        name="order_list",
+        observations=[catalog[key].model_dump(mode="json") for key in evidence_ids],
+    )
+    step(
+        "deterministic_answer_check",
+        source="owned current order records",
+        count=len(orders),
+        passed=True,
+    )
+    return finish(
+        "answered",
+        "Here are your orders:\n\n" + "\n".join(lines)
+        if orders
+        else "You don’t have any orders yet.",
+        "owned_order_list",
+        evidence_ids,
+    )
+
+
 async def run_support(
     request: SupportRequest,
     store: MockStore,
@@ -136,11 +236,17 @@ async def run_support(
 ) -> SupportResponse:
     steps, catalog, usage = [], {}, {}
     usage.update(initial_usage or {})
+    prior_resources, token_limit, tool_limit = remaining_resources(
+        task_checkpoint, MAX_TOKENS, MAX_TOOL_CALLS
+    )
     tool_count = 0
     repairs = 0
     deadline = asyncio.get_running_loop().time() + 120
 
     async def bounded(call, seconds):
+        if task_budget_exhausted(prior_resources, usage, token_limit):
+            call.close()
+            raise TaskBudgetReached("Task resource limit reached")
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             call.close()
@@ -158,6 +264,9 @@ async def run_support(
             on_step(item)
 
     def finish(disposition, answer, reason, evidence_ids=(), operation=None):
+        disposition, answer, reason, evidence_ids, operation = bound_proposal_result(
+            usage, token_limit, disposition, answer, reason, evidence_ids, operation
+        )
         step(
             "stop",
             disposition=disposition,
@@ -203,7 +312,9 @@ async def run_support(
     try:
         state = precheck(request, history or [])
         if task_checkpoint:
-            state["task_checkpoint"] = task_checkpoint.model_dump(mode="json")
+            state["task_checkpoint"] = task_checkpoint.model_dump(
+                mode="json", exclude={"saved_policy"}
+            )
             state["checkpoint_is_current_evidence"] = False
         recent_text = json.dumps(state["recent_turns"])
         state["references"] = {
@@ -232,7 +343,9 @@ async def run_support(
         if task_checkpoint:
             step(
                 "task_resumed" if task_resumed else "task_created",
-                checkpoint=task_checkpoint.model_dump(mode="json"),
+                checkpoint=task_checkpoint.model_dump(
+                    mode="json", exclude={"saved_policy"}
+                ),
                 current_state_refresh_required=True,
             )
             if task_checkpoint.status == "awaiting_approval" and is_confirmation_reply(
@@ -252,53 +365,7 @@ async def run_support(
             r"(?:what are my orders|(?:show|list)(?: me)? my orders|my orders)[?.!]*",
             state["message"].lower(),
         ):
-            step("deterministic_route", route="owned_order_list", model_required=False)
-            step("tool_request", name="order_list", arguments={})
-            orders = customer.orders()
-            evidence_ids = []
-            lines = [
-                "| Ordered | Items | Payment | Delivery |",
-                "| :--- | :--- | :--- | :--- |",
-            ]
-            for order in orders:
-                facts = order.model_dump(
-                    mode="json", exclude={"address", "customer_id"}
-                )
-                record = add(
-                    "order",
-                    order.order_id,
-                    "current_owned_order_snapshot",
-                    json.dumps(facts),
-                )
-                evidence_ids.append(record["evidence_id"])
-                products = ", ".join(
-                    f"{line.quantity} × {next((p.name for p in store.fixture.products if p.product_id == line.product_id), line.product_id)}"
-                    for line in order.lines
-                )
-                lines.append(
-                    f"| {order.placed_on} | {products.replace(chr(124), chr(92) + chr(124))} | {order.state.value.capitalize()} | {order.fulfillment.value.replace('_', ' ').capitalize()} |"
-                )
-            step(
-                "tool_result",
-                name="order_list",
-                observations=[
-                    catalog[key].model_dump(mode="json") for key in evidence_ids
-                ],
-            )
-            step(
-                "deterministic_answer_check",
-                source="owned current order records",
-                count=len(orders),
-                passed=True,
-            )
-            return finish(
-                "answered",
-                "Here are your orders:\n\n" + "\n".join(lines)
-                if orders
-                else "You don’t have any orders yet.",
-                "owned_order_list",
-                evidence_ids,
-            )
+            return answer_order_list(customer, store, add, catalog, step, finish)
         # A bounded, validated snapshot is supplied before every Jev/model call.
         if len(json.dumps(state)) > MAX_CONTEXT_CHARS:
             return finish(
@@ -319,9 +386,24 @@ async def run_support(
                 "Please confirm or reject the specific pending proposal using its confirmation action.",
                 "explicit_confirmation_required",
             )
+        step(
+            "task_budget_check",
+            prior=prior_resources.model_dump(mode="json"),
+            limits=TASK_LIMITS.model_dump(mode="json"),
+            remaining_tokens=token_limit,
+            remaining_tool_calls=tool_limit,
+            passed=not task_budget_exhausted(prior_resources, usage, token_limit),
+        )
+        if task_budget_exhausted(prior_resources, usage, token_limit):
+            return finish(
+                "handoff_needed",
+                "This request has reached its support limit. Please contact our support team.",
+                "task_resource_budget",
+            )
         step("intent_input", state=state, model=judge.model_id)
         judgment = await bounded(judge.classify(state), 15)
         usage["intent"] = judgment.usage
+        ensure_task_budget(prior_resources, usage, token_limit)
         if (
             task_checkpoint
             and task_checkpoint.status == "awaiting_approval"
@@ -412,59 +494,20 @@ async def run_support(
             and task_checkpoint.kind in {"cancel_order", "change_address"}
             and len(state["references"]["owned_order_ids"]) == 1
         ):
-            order_id = state["references"]["owned_order_ids"][0]
-            current = customer.order(order_id).order
-            if current is not None:
-                step(
-                    "tool_request",
-                    name="order_detail",
-                    arguments={"order_id": order_id},
-                    application_owned=True,
-                )
-                facts = order_facts(current)
-                observation = add(
-                    "order", order_id, "current_owned_order_snapshot", json.dumps(facts)
-                )
-                step(
-                    "eligibility_check",
-                    order_id=order_id,
-                    rules=facts["policy_rule_inputs"],
-                    result=facts["read_only_review"],
-                    execution_authorized=False,
-                )
-                step("tool_result", name="order_detail", observations=[observation])
-                state["observations"].append(
-                    {
-                        "tool": {
-                            "name": "order_detail",
-                            "arguments": {"order_id": order_id},
-                        },
-                        "results": [observation],
-                    }
-                )
-                tool_count += 1
-                state["tools"].pop("order_detail", None)
-                state["required_evidence"] = (
-                    "Current selected order has already been refreshed. Retrieve applicable policy next if needed; reuse this order evidence."
-                )
-                step(
-                    "completed_read_check",
-                    source="selected_task_order",
-                    removed_tools=["order_detail"],
-                    reason="current_snapshot_already_available",
-                )
-        for turn in range(MAX_TURNS):
-            tokens = sum(
-                int(v.get("input_tokens", 0)) + int(v.get("output_tokens", 0))
-                for v in usage.values()
+            tool_count += refresh_selected_order(
+                state, customer, order_facts, add, step, tool_limit
             )
-            if tokens >= MAX_TOKENS or len(json.dumps(state)) > MAX_CONTEXT_CHARS:
+        if task_resumed and task_checkpoint:
+            restore_policy(task_checkpoint.saved_policy, store, state, add, step)
+        for turn in range(MAX_TURNS):
+            tokens = reported_tokens(usage)
+            if tokens >= token_limit or len(json.dumps(state)) > MAX_CONTEXT_CHARS:
                 return finish(
                     "handoff_needed",
                     "The support check reached its limit. Human review is needed.",
                     "context_or_token_budget",
                 )
-            state["remaining_token_budget"] = MAX_TOKENS - tokens
+            state["remaining_token_budget"] = token_limit - tokens
             step(
                 "model_precheck",
                 turn=turn + 1,
@@ -556,13 +599,10 @@ async def run_support(
                     ],
                     "customer_statement_is_unverified": True,
                 }
-                tokens = sum(
-                    int(v.get("input_tokens", 0)) + int(v.get("output_tokens", 0))
-                    for v in usage.values()
-                )
+                tokens = reported_tokens(usage)
                 if (
                     len(json.dumps(ground_state)) > MAX_CONTEXT_CHARS
-                    or tokens >= MAX_TOKENS
+                    or tokens >= token_limit
                 ):
                     return finish(
                         "handoff_needed",
@@ -633,11 +673,8 @@ async def run_support(
                             "The answer needs further support review.",
                             "grounding_context_limit",
                         )
-                    reported_tokens = sum(
-                        int(v.get("input_tokens", 0)) + int(v.get("output_tokens", 0))
-                        for v in usage.values()
-                    )
-                    if reported_tokens >= MAX_TOKENS:
+                    ground_tokens = reported_tokens(usage)
+                    if ground_tokens >= token_limit:
                         return finish(
                             "handoff_needed",
                             "The support check reached its token limit. Human review is needed.",
@@ -645,7 +682,7 @@ async def run_support(
                         )
                     step(
                         "grounding_precheck",
-                        tokens=reported_tokens,
+                        tokens=ground_tokens,
                         context_chars=len(json.dumps(ground_state)),
                         scope="only deterministically checked cited evidence",
                     )
@@ -681,7 +718,7 @@ async def run_support(
                 step("repair", reason=reason, attempt=repairs)
                 continue
             tool_count += 1
-            if tool_count > MAX_TOOL_CALLS:
+            if tool_count > tool_limit:
                 return finish(
                     "handoff_needed",
                     "The lookup reached its limit. Human support review is needed.",
@@ -884,7 +921,7 @@ async def run_support(
                 if (
                     (new_sources and new_sources <= previous_sources)
                     or call.name in {"compatibility", "case_detail"}
-                    or tool_count >= MAX_TOOL_CALLS
+                    or tool_count >= tool_limit
                     or (
                         call.name in {"order_detail", "order_list", "policy_search"}
                         and any(item.kind == "order" for item in catalog.values())
@@ -917,6 +954,12 @@ async def run_support(
             "handoff_needed",
             "The support check reached its turn limit. Human review is needed.",
             "turn_budget",
+        )
+    except TaskBudgetReached:
+        return finish(
+            "handoff_needed",
+            "This request has reached its support limit. Please contact our support team.",
+            "task_resource_budget",
         )
     except Exception as exc:  # noqa: BLE001 - save a terminal provider failure
         if isinstance(exc, ModelBoundaryFailure):

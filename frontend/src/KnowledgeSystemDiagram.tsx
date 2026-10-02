@@ -1,58 +1,31 @@
-import { ArchitectureFlow } from './components/ArchitectureFlow'
+import { MarkerType } from '@xyflow/react'
+import ArchitectureGraph from './components/ArchitectureGraph'
+import { box, down, link, memory } from './components/architectureGraphData'
 
-const stages = [
-  {
-    label: '01 · Ingest and index',
-    nodes: [
-      ['Synthetic sources', 'Policies · documents · support tickets'],
-      ['Parse + chunk', 'Versioned text · exact source offsets'],
-      ['Embed changes', 'Content hash · embedding model version'],
-      ['Local index', 'Vectors · text · server-owned ACLs'],
-    ],
-  },
-  {
-    label: '02 · Check request and classify intent',
-    nodes: [
-      ['Deterministic checks', 'Validate · normalize · bound input'],
-      ['Action signals', 'Keyword patterns before model calls'],
-      ['Jev intent', 'Runs only when action signals are present'],
-      ['App decision', 'Threshold chooses answer or action path'],
-    ],
-  },
-  {
-    label: '03 · Retrieve authorized evidence',
-    nodes: [
-      ['Resolve access', 'Server-owned persona groups'],
-      ['Lexical search', 'BM25-style term scoring'],
-      ['Vector search', 'Query embedding · authorized vectors only'],
-      ['Fuse + rerank', 'Bounded candidates · exact excerpts'],
-    ],
-  },
+const nodes = [
+  box('documents', 0, 0, 'SOURCE SYSTEMS', 'Internal documents', 'Policies · knowledge documents · support tickets'),
+  box('ingestion', 300, 0, 'INGESTION PIPELINE', 'Chunk + embed changes', 'Parse · version · content hash · exact locators', 'gate'),
+  box('index', 600, 0, 'KNOWLEDGE STORE', 'Text + vector index', 'Versioned chunks · embeddings · document ACLs', 'support'),
+  box('client', 0, 230, 'CLIENT', 'Employee assistant', 'Question · cited answer · approval controls'),
+  box('gateway', 300, 230, 'REQUEST BOUNDARY', 'Identity + intent gateway', 'Prechecks → optional Jev → app decision', 'gate'),
+  box('retrieval', 600, 230, 'ACCESS-CONTROLLED RAG', 'Hybrid retrieval', 'ACL filter → lexical + vector search → rerank', 'gate'),
+  box('answer', 900, 230, 'MODEL + VERIFICATION', 'Cited answer service', 'Generate → citation checks → Jev grounding', 'model'),
+  box('output', 1200, 230, 'RESPONSE', 'Answer or abstention', 'Verified Markdown answer · grouped sources', 'outcome'),
+  box('state', 300, 460, 'PERSISTENT STATE', 'Chat + audit store', 'Bounded history · runs · evidence · decisions', 'support'),
+  box('actions', 900, 460, 'APPROVAL-GATED ACTION', 'Support follow-up service', 'Typed proposal → approve → recheck → local task', 'gate'),
 ]
-
+const edges = [
+  link('documents', 'ingestion'), link('ingestion', 'index'),
+  link('client', 'gateway'), link('gateway', 'retrieval'),
+  link('index', 'retrieval', 'authorized index reads', { ...down, ...memory }),
+  link('retrieval', 'answer', 'selected excerpts'), link('answer', 'output'),
+  link('retrieval', 'actions', 'action intent + ticket evidence', { sourceHandle: 'out-bottom', targetHandle: 'left' }),
+  link('state', 'gateway', 'load / save context', { sourceHandle: 'out-top', targetHandle: 'bottom', ...memory, markerStart: { type: MarkerType.ArrowClosed, color: '#aab7ae' } }),
+  link('answer', 'state', 'answer + evidence', { sourceHandle: 'out-bottom-left', targetHandle: 'top', type: 'default', ...memory }),
+  link('actions', 'state', 'proposal / decision / task', { sourceHandle: 'out-bottom', targetHandle: 'bottom', ...memory }),
+]
 export default function KnowledgeSystemDiagram() {
-  return <div className="knowledge-architecture" role="region" aria-label="Internal Knowledge and Action architecture">
-    {stages.map((stage) => <section className="knowledge-architecture-stage" key={stage.label}>
-      <h3>{stage.label}</h3>
-      <ArchitectureFlow nodes={stage.nodes} />
-    </section>)}
-
-    <section className="knowledge-architecture-stage">
-      <h3>04 · Answer path</h3>
-      <div className="knowledge-architecture-split">
-        <div><strong>Selected passages → typed answer claims</strong><small>The answer model receives only the current question, bounded conversation context, and ACL-authorized excerpts. Prior answers help resolve follow-ups but are not evidence.</small></div>
-        <div><strong>Deterministic citation checks → Jev grounding → saved answer</strong><small>Application code verifies evidence IDs and exact locators first. Jev then checks claim support; unsupported or unverified answers abstain. The answer and ordered workflow are saved to the shared run history.</small></div>
-      </div>
-    </section>
-
-    <section className="knowledge-architecture-stage">
-      <h3>05 · Action path</h3>
-      <div className="knowledge-architecture-split">
-        <div><strong>Positive intent → authorized ticket evidence → typed proposal</strong><small>Only the supported follow-up action is available. The proposal model receives authorized support-ticket passages and cannot execute a task.</small></div>
-        <div><strong>Simulated approval → policy recheck → idempotent mock task</strong><small>Application policy checks the approver, requester scope, action type, and evidence again at execution. Writes stay in the local demo database; no external task system is called.</small></div>
-      </div>
-    </section>
-
-    <p className="knowledge-architecture-footnote">The persona picker demonstrates identity selection; it is not real authentication. Both search paths apply ACLs before candidate scoring. The default mock embeddings verify wiring, not semantic retrieval quality.</p>
-  </div>
+  return <ArchitectureGraph nodes={nodes} edges={edges}
+    description="Internal Knowledge and Action system design: sources are chunked and embedded into a versioned text/vector index. Request checks precede conditional Jev intent. Authorized hybrid retrieval supplies evidence to a verified answer service or an approval-gated support follow-up service. Chat context, evidence and decisions are persisted."
+    note="Ingestion is separate from request-time retrieval. ACL filtering happens before both lexical and vector scoring. Prior messages resolve context but are not evidence. Only the supported follow-up task can be proposed; approval rechecks approver, requester access, action type and evidence before an idempotent write. Identities are simulated and mock vectors do not establish semantic retrieval quality." />
 }

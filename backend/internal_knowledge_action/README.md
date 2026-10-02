@@ -48,3 +48,5 @@ Run offline checks from the repository root:
 ```sh
 LOGFIRE_SEND_TO_LOGFIRE=false .venv/bin/python -m unittest discover -s backend/internal_knowledge_action/tests -v
 ```
+
+The architecture modal uses shared `ArchitectureGraph` boxes and edges in the Incident diagram style. It separates ingestion from runtime retrieval, shows ACL-filtered lexical/vector searches merging into reranking, and branches into checked cited answers or approval-gated mock tasks. Pan/zoom and fit controls are available.

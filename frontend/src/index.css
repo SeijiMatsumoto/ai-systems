@@ -201,6 +201,8 @@ pre,
 .knowledge-architecture-split small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .knowledge-architecture-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .knowledge-architecture-footnote { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.knowledge-architecture-stage > .knowledge-architecture-split { margin-top: 16px; }
+.knowledge-architecture-stage > .knowledge-architecture-footnote { margin-top: 14px; }
 
 @media (max-width: 800px) {
   .knowledge-architecture { padding: 12px; }
@@ -2727,3 +2729,9 @@ pre,
 .markdown-answer-table th:nth-last-child(-n+2), .markdown-answer-table td:nth-last-child(-n+2) { min-width: 80px; }
 .markdown-answer-table tr:last-child td { border-bottom: 0; }
 .support-workspace { margin-top: 28px; }
+
+.system-architecture-graph .architecture-modal-note { margin: 0; padding: 18px 22px; }
+.architecture-modal-body:has(.system-architecture-graph) { display: flex; flex-direction: column; overflow: hidden; }
+.system-architecture-graph { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.system-architecture-graph .incident-diagram { flex: 1; height: auto; min-height: 0; }
+.architecture-graph-legend { margin: 0; padding: 14px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }

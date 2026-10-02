@@ -4,7 +4,7 @@ const IncidentSystemDiagram = lazy(() => import('./IncidentSystemDiagram'))
 const ResearchSystemDiagram = lazy(() => import('./ResearchSystemDiagram'))
 const KnowledgeSystemDiagram = lazy(() => import('./KnowledgeSystemDiagram'))
 const SupportSystemDiagram = lazy(() => import('./SupportSystemDiagram'))
-const PlannedSystemDiagram = lazy(() => import('./PlannedSystemDiagram'))
+const CodingSystemDiagram = lazy(() => import('./CodingSystemDiagram'))
 
 export default function ArchitectureModal({ systemId, title, availability, onClose }: {
   systemId: string
@@ -48,7 +48,7 @@ export default function ArchitectureModal({ systemId, title, availability, onClo
           {systemId === 'knowledge-action' && <p className="architecture-modal-note">The runnable demo includes indexed knowledge retrieval, cited answers, Jev grounding checks, and an approval-gated mock support task. Persona and approver selection are simulated; task records stay local.</p>}
           {availability === 'planned' && systemId !== 'knowledge-action' && <p className="architecture-modal-note">This diagram shows the intended boundaries. The workflow is an architecture scaffold and is not runnable yet.</p>}
           <Suspense fallback={<p className="architecture-modal-note">Loading diagram…</p>}>
-            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : systemId === 'customer-support' ? <SupportSystemDiagram /> : <PlannedSystemDiagram systemId={systemId} />}
+            {systemId === 'incident-investigation' ? <IncidentSystemDiagram /> : systemId === 'research' ? <ResearchSystemDiagram /> : systemId === 'knowledge-action' ? <KnowledgeSystemDiagram /> : systemId === 'customer-support' ? <SupportSystemDiagram /> : <CodingSystemDiagram />}
           </Suspense>
         </div>
       </div>

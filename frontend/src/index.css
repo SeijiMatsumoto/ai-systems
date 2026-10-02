@@ -2735,3 +2735,8 @@ pre,
 .system-architecture-graph { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .system-architecture-graph .incident-diagram { flex: 1; height: auto; min-height: 0; }
 .architecture-graph-legend { margin: 0; padding: 14px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.coding-architecture-diagram { display: flex; flex: 1; min-height: 0; }
+.coding-architecture-diagram .incident-diagram-node { display: flex; flex-direction: column; width: 330px; min-height: 205px; gap: 10px; padding: 17px; }
+.coding-architecture-diagram .incident-diagram-node strong { font-size: 16px; }
+.coding-architecture-diagram .incident-diagram-node small { white-space: pre-line; font-size: 12px; line-height: 1.65; }

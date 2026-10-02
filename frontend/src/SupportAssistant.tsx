@@ -3,12 +3,12 @@ import { CitationTooltip } from './components/CitationTooltip'
 import { MarkdownContent } from './components/MarkdownContent'
 import TaskScroll from './TaskScroll'
 import { taskTrail } from './taskTrail'
-import { supportOrderSummary } from './supportOrderSummary'
+import { formatSupportDate, supportOrderSummary } from './supportOrderSummary'
 import { supportChats, supportDecide, supportHistory, supportMessage, supportNewChat, supportSignIn } from './supportApi'
 import type { SupportConversation, SupportResult, SupportStep, SupportTurn } from './supportTypes'
 
 const LABELS: Record<string, string> = {
-  continuation_precheck: 'Checking conversation context', continuation_input: 'Resolving the follow-up', continuation_check: 'Choosing the support task',
+  conversation_context_check: 'Checking saved conversation subjects', context_selection_check: 'Validating subject selection', conversation_context_saved: 'Saving conversation context',
   task_budget_check: 'Checking cumulative task limits', policy_reuse_check: 'Checking saved policy freshness',
   task_created: 'Starting a support task', task_resumed: 'Resuming the saved support task', task_checkpoint: 'Saving task progress',
   request_check: 'Checking the request', intent_input: 'Classifying the request', intent_check: 'Checking intent confidence',
@@ -128,10 +128,10 @@ export default function SupportAssistant() {
       if (source.kind !== 'order') continue
       try {
         const order = JSON.parse(source.text)
-        if (order.placed_on) display = display.replaceAll(source.source_id, `order placed ${order.placed_on}`)
+        if (order.placed_on) display = display.replaceAll(source.source_id, `order placed ${formatSupportDate(order.placed_on)}`)
       } catch { /* Non-snapshot evidence retains the general order label below. */ }
     }
-    return display.replace(/order-[a-zA-Z0-9_-]+/g, 'your order')
+    return display.replace(/order-[a-zA-Z0-9_-]+/g, 'your order').replace(/\b\d{4}-\d{2}-\d{2}\b/g, formatSupportDate)
   }
   const terminal = new Map(turns.flatMap(turn => turn.response.receipt ? [[turn.response.receipt.proposal_id, turn.response.receipt.outcome] as const] : []))
   const selected = turns.find(turn => turn.response.run_id === selectedRun)?.response ?? turns.at(-1)?.response
@@ -158,7 +158,7 @@ export default function SupportAssistant() {
         </div>
         <form className="knowledge-chat-composer" onSubmit={event => { event.preventDefault(); void send() }}><label className="knowledge-chat-input-label" htmlFor="support-message">Message customer support</label><textarea id="support-message" placeholder="Ask about an order, a policy, or camera equipment…" value={draft} maxLength={2000} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} /><div className="knowledge-composer-footer"><span>Enter to send · Shift+Enter for a new line</span><button className="primary-button" type="submit" disabled={busy || !draft.trim()}>{busy ? 'Working…' : 'Send'}</button></div></form>
       </section>
-      <aside className="knowledge-run-details support-admin" id="support-workflow" aria-label="Admin view"><div className="knowledge-run-details-heading"><div><p className="section-kicker">Demo observability</p><h3>Admin view</h3></div><span>{busy ? 'Working…' : selected?.stop_reason.replaceAll('_', ' ')}</span></div><p className="support-admin-note">Internal workflow, evidence checks, and model usage. This panel is for the demo operator.</p><label className="support-admin-run">Inspect message<select value={selectedRun} disabled={busy} onChange={event => setSelectedRun(event.target.value)}><option value="">Latest message</option>{turns.map(turn => <option key={turn.response.run_id} value={turn.response.run_id}>{turn.question.slice(0,70)}</option>)}</select></label>{busy && <TaskScroll items={steps.length ? taskTrail(steps, describe) : [{ key: 'start', label: 'Checking request' }]} active />}<details className="knowledge-answer-walkthrough"><summary>Workflow · {workflow.length} steps</summary><ol className="support-workflow-list">{workflow.map(step => <li key={step.sequence}><details><summary>{describe(step)}</summary><pre>{JSON.stringify(step.details, null, 2)}</pre></details></li>)}</ol></details>{selected && <details className="knowledge-answer-walkthrough"><summary>Verification and usage</summary><p>Fixture {selected.fixture_version} · {selected.embedding_model ?? 'No policy embedding used'}</p><pre className="support-json">{JSON.stringify(selected.usage, null, 2)}</pre>{selected.task && <><p>Task totals across messages</p><pre className="support-json">{JSON.stringify(selected.task.resources, null, 2)}</pre></>}<p>Only visible decisions and tool results are recorded. Model private reasoning and provider internals are unavailable.</p></details>}</aside></div>
+      <aside className="knowledge-run-details support-admin" id="support-workflow" aria-label="Admin view"><div className="knowledge-run-details-heading"><div><p className="section-kicker">Demo observability</p><h3>Admin view</h3></div><span>{busy ? 'Working…' : selected?.stop_reason.replaceAll('_', ' ')}</span></div><p className="support-admin-note">Internal workflow, evidence checks, and model usage. This panel is for the demo operator.</p><label className="support-admin-run">Inspect message<select value={selectedRun} disabled={busy} onChange={event => setSelectedRun(event.target.value)}><option value="">Latest message</option>{turns.map(turn => <option key={turn.response.run_id} value={turn.response.run_id}>{turn.question.slice(0,70)}</option>)}</select></label>{busy && <TaskScroll items={steps.length ? taskTrail(steps, describe) : [{ key: 'start', label: 'Checking request' }]} active />}<details className="knowledge-answer-walkthrough"><summary>Workflow · {workflow.length} steps</summary><ol className="support-workflow-list">{workflow.map(step => <li key={step.sequence}><details><summary>{describe(step)}</summary><pre>{JSON.stringify(step.details, null, 2)}</pre></details></li>)}</ol></details>{selected && <details className="knowledge-answer-walkthrough"><summary>Verification and usage</summary><p>Fixture {selected.fixture_version} · {selected.embedding_model ?? 'No policy embedding used'}</p><pre className="support-json">{JSON.stringify(selected.usage, null, 2)}</pre>{selected.task && <><p>Task totals across messages</p><pre className="support-json">{JSON.stringify(selected.task.resources, null, 2)}</pre></>}{selected.context && <><p>Conversation subjects and unresolved choices</p><pre className="support-json">{JSON.stringify(selected.context, null, 2)}</pre></>}<p>Only visible decisions and tool results are recorded. Model private reasoning and provider internals are unavailable.</p></details>}</aside></div>
     </>}
   </div>
 }

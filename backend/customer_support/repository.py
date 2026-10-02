@@ -14,7 +14,16 @@ from backend.db.schemas import (
     SupportTask,
 )
 
-from .contracts import ConversationTurn, SupportResponse, SupportStep, TaskCheckpoint
+from .contracts import (
+    ContextChange,
+    ConversationContext,
+    ConversationTurn,
+    SubjectReference,
+    SupportResponse,
+    SupportStep,
+    TaskCheckpoint,
+)
+from .conversation_context import commit_context, conservative_context
 from .store import MockStore
 from .task_resources import resource_totals, saved_policies
 
@@ -26,6 +35,28 @@ class ConversationBusy(ValueError):
 class SupportRepository:
     def __init__(self, session_factory):
         self.session_factory = session_factory
+
+    def context_snapshot(self, token, conversation_id):
+        with self.session_factory() as db:
+            _, conversation = self._owned(db, token, conversation_id)
+            if conversation.context_state is None:
+                rows = db.scalars(
+                    select(SupportOutput)
+                    .where(SupportOutput.conversation_id == conversation_id)
+                    .order_by(
+                        SupportOutput.created_at.desc(), SupportOutput.run_id.desc()
+                    )
+                    .limit(20)
+                )
+                context = conservative_context(
+                    [
+                        SupportResponse.model_validate(row.response_payload)
+                        for row in rows
+                    ]
+                )
+                conversation.context_state = context.model_dump(mode="json")
+                return context
+            return ConversationContext.model_validate(conversation.context_state)
 
     def routing_candidates(self, token, conversation_id):
         with self.session_factory() as db:
@@ -42,54 +73,6 @@ class SupportRepository:
                 if row.checkpoint.get("status") != "abandoned"
             ]
 
-    def apply_task_route(self, token, conversation_id, run_id, message, route):
-        with self.session_factory() as db:
-            _, conversation = self._owned(db, token, conversation_id)
-            if conversation.active_run_id != run_id:
-                raise ValueError("Task routing does not own reservation")
-            if route.route == "new":
-                if route.task_kind is None:
-                    return None, False
-                checkpoint = TaskCheckpoint(
-                    task_id=str(uuid4()), kind=route.task_kind, goal=message[:1000]
-                )
-                db.add(
-                    SupportTask(
-                        id=UUID(checkpoint.task_id),
-                        conversation_id=conversation_id,
-                        checkpoint=checkpoint.model_dump(mode="json"),
-                        last_run_id=run_id,
-                    )
-                )
-                return checkpoint, False
-            if route.route == "clarify":
-                return None, False
-            row = db.get(SupportTask, UUID(route.task_id))
-            if row is None or row.conversation_id != conversation_id:
-                raise LookupError("Task not found")
-            checkpoint = TaskCheckpoint.model_validate(row.checkpoint)
-            if checkpoint.status == "abandoned":
-                raise ValueError("Task has been abandoned")
-            if route.route == "correct" and checkpoint.status != "awaiting_approval":
-                checkpoint = checkpoint.model_copy(
-                    update={
-                        "goal": "Original request: "
-                        + checkpoint.goal[:400]
-                        + "\nCustomer correction: "
-                        + message[:500],
-                        "selected_order_ids": (),
-                        "pending_question": None,
-                        "evidence_ids": (),
-                        "evidence_run_id": None,
-                        "version": checkpoint.version + 1,
-                        "last_answer": "",
-                        "completed_steps": (),
-                        "saved_policy": (),
-                    }
-                )
-                row.checkpoint = checkpoint.model_dump(mode="json")
-            return checkpoint, True
-
     @staticmethod
     def checkpoint_result(db, conversation_id, response):
         if response.task is None:
@@ -100,6 +83,21 @@ class SupportRepository:
         saved = TaskCheckpoint.model_validate(row.checkpoint)
         if saved.version != response.task.version:
             raise ValueError("Stale task checkpoint")
+        if (
+            response.task_directive
+            and response.task_directive.mode == "correct"
+            and saved.status != "awaiting_approval"
+        ):
+            saved = saved.model_copy(
+                update={
+                    "selected_order_ids": (),
+                    "saved_policy": (),
+                    "evidence_ids": (),
+                    "evidence_run_id": None,
+                    "completed_steps": (),
+                    "goal": response.task.goal,
+                }
+            )
         status = (
             "abandoned"
             if response.stop_reason == "task_abandoned"
@@ -392,6 +390,45 @@ class SupportRepository:
                 raise ValueError("Run does not own the conversation reservation")
             from .actions import save_operation
 
+            if response.context is not None:
+                current_context = ConversationContext.model_validate(
+                    conversation.context_state or {}
+                )
+                if current_context.version != response.context.version:
+                    raise ValueError("Stale conversation context")
+            if response.task is None and (
+                response.approved_operation is not None
+                or (
+                    response.action_requested
+                    and response.stop_reason == "missing_reference"
+                    and response.task_directive is not None
+                    and response.task_directive.mode == "new"
+                )
+            ):
+                operation = response.approved_operation
+                kind = (
+                    "human_review"
+                    if operation and operation.kind == "create_case"
+                    else operation.kind
+                    if operation
+                    else response.task_directive.kind
+                    if response.task_directive
+                    else None
+                )
+                # Unknown action type in clarification must be declared, not inferred from wording.
+                checkpoint = TaskCheckpoint.model_validate(
+                    {"task_id": str(uuid4()), "kind": kind, "goal": question[:1000]}
+                )
+                db.add(
+                    SupportTask(
+                        id=UUID(checkpoint.task_id),
+                        conversation_id=conversation_id,
+                        checkpoint=checkpoint.model_dump(mode="json"),
+                        last_run_id=run_id,
+                    )
+                )
+                db.flush()
+                response = response.model_copy(update={"task": checkpoint})
             response = (
                 save_operation(db, identity, conversation, response, store)
                 if store is not None
@@ -427,6 +464,40 @@ class SupportRepository:
                 )
                 response = response.model_copy(update={"steps": tuple(prior)})
             response = self.checkpoint_result(db, conversation_id, response)
+            if response.context is not None:
+                if response.review_case:
+                    response = response.model_copy(
+                        update={
+                            "context_update": ContextChange(
+                                mode="select",
+                                subjects=(
+                                    SubjectReference(
+                                        kind="case",
+                                        record_id=response.review_case.case_id,
+                                    ),
+                                ),
+                            )
+                        }
+                    )
+                original_context = response.context
+                assert original_context is not None
+                updated_context = commit_context(original_context, response)
+                conversation.context_state = updated_context.model_dump(mode="json")
+                response = response.model_copy(update={"context": updated_context})
+                prior = list(response.steps[:-1])
+                prior.append(
+                    SupportStep(
+                        sequence=len(prior) + 1,
+                        stage="conversation_context_saved",
+                        details=updated_context.model_dump(
+                            mode="json", exclude={"saved_policy"}
+                        ),
+                    )
+                )
+                prior.append(
+                    response.steps[-1].model_copy(update={"sequence": len(prior) + 1})
+                )
+                response = response.model_copy(update={"steps": tuple(prior)})
             db.add(
                 SupportOutput(
                     run_id=run_id,

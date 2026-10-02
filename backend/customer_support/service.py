@@ -18,6 +18,7 @@ from .contracts import (
     CaseCategory,
     CaseRequest,
     CompatibilityRequest,
+    ConversationContext,
     ConversationTurn,
     EmptyArgs,
     Evidence,
@@ -31,6 +32,14 @@ from .contracts import (
     SupportStep,
     TaskCheckpoint,
 )
+from .conversation_context import (
+    compact_context,
+    final_change,
+    scope_context,
+    validate_change,
+)
+from .intent_classification import INTENT_PROMPT_VERSION, classification_input
+from .intent_policy import INTENT_MARGIN, INTENT_THRESHOLD, intent_branch
 from .providers import Judge, ModelBoundaryFailure, SupportModel
 from .retrieval import IndexUnavailable, PolicyIndex, search
 from .store import CustomerStore, MockStore, review_order
@@ -62,17 +71,6 @@ EXECUTION = re.compile(
     r"\b(refund(?:ed)?|cancel(?:led|ed)|case|address|return)\b.{0,35}\b(processed|issued|completed|created|approved|updated|guaranteed)\b|\b(?:I|we)\s+(?:have\s+)?(?:refunded|cancelled|canceled|approved|created|updated)\b|\b(?:you(?:'ll| will)|we will)\s+(?:get|receive|issue|process)\s+(?:a |your |the )?refund\b",
     re.IGNORECASE,
 )
-
-
-def is_confirmation_reply(message):
-    """Cheap continuation signal; never authority to execute a proposal."""
-    return bool(
-        re.fullmatch(
-            r"(?:(?:yes|ok|okay)[, ]+)?(?:yes|no|ok|okay|confirm|go ahead(?: and (?:do|cancel) it)?|(?:please )?(?:do|cancel) (?:it|that)(?: for me)?|proceed(?: with (?:it|that))?|yes,? cancel please|cancel please)(?: please)?[.! ]*",
-            message.strip(),
-            re.IGNORECASE,
-        )
-    )
 
 
 def precheck(request: SupportRequest, history: list[ConversationTurn]) -> dict:
@@ -216,6 +214,178 @@ def answer_order_list(customer, store, add, catalog, step, finish):
     )
 
 
+def select_task(directive, candidates, message):
+    task = next(
+        (task for task in candidates if task.task_id == directive.task_id), None
+    )
+    if task is None or task.status in {"completed", "abandoned"}:
+        raise ValueError("Task directive selected unavailable task")
+    if directive.mode == "correct" and task.status != "awaiting_approval":
+        return task.model_copy(
+            update={
+                "selected_order_ids": (),
+                "saved_policy": (),
+                "evidence_ids": (),
+                "evidence_run_id": None,
+                "pending_question": None,
+                "completed_steps": (),
+                "goal": task.goal[:400] + "\nCustomer correction: " + message[:500],
+            }
+        )
+    return task
+
+
+def proposal_problem(
+    operation, operations_enabled, intent, catalog, customer, source_text
+):
+    if not operations_enabled or intent != Intent.ACTION:
+        return "action_not_requested"
+    elif any(key not in catalog for key in operation.evidence_ids):
+        return "unknown_operation_citation"
+    elif operation.order_id and customer.order(operation.order_id).order is None:
+        return "order_not_found"
+    elif operation.order_id and not any(
+        catalog[key].kind == "order" and catalog[key].source_id == operation.order_id
+        for key in operation.evidence_ids
+    ):
+        return "missing_order_evidence"
+    elif isinstance(operation, (CancelProposal, AddressProposal)) and not any(
+        catalog[key].kind == "policy" for key in operation.evidence_ids
+    ):
+        return "missing_policy_evidence"
+    elif (
+        isinstance(operation, CaseRequest)
+        and operation.customer_statement.lower() not in source_text
+    ):
+        return "invented_customer_statement"
+    elif isinstance(operation, AddressProposal) and any(
+        value.lower() not in source_text
+        for value in (
+            operation.address.line1,
+            operation.address.city,
+            operation.address.postal_code,
+        )
+    ):
+        return "invented_address"
+    return None
+
+
+def task_choice(
+    directive, candidates, message, state, step, intent, operations_enabled
+):
+    if intent != Intent.ACTION or not operations_enabled:
+        return None, (
+            "clarification",
+            "Could you clarify what you want us to do?",
+            "task_action_not_authorized",
+        )
+    if directive.mode == "new":
+        return None, None
+    selected = select_task(directive, candidates, message)
+    step(
+        "task_selection_check",
+        directive=directive.model_dump(mode="json"),
+        checkpoint=selected.model_dump(mode="json", exclude={"saved_policy"}),
+        passed=True,
+    )
+    if selected.status == "awaiting_approval":
+        if directive.mode == "resume":
+            return selected, (
+                "clarification",
+                "Please confirm or reject the existing request using its confirmation card.",
+                "explicit_confirmation_required",
+            )
+        return selected, (
+            "clarification",
+            "Please reject the existing proposal using its card before changing or abandoning that request.",
+            "explicit_rejection_required",
+        )
+    if directive.mode == "abandon":
+        return selected, (
+            "answered",
+            "Okay, I’ve stopped that request.",
+            "task_abandoned",
+        )
+    state["task_checkpoint"] = selected.model_dump(
+        mode="json", exclude={"saved_policy"}
+    )
+    if directive.mode == "correct":
+        state["references"]["owned_order_ids"] = []
+    return selected, None
+
+
+def request_state(
+    request,
+    history,
+    current_context,
+    candidates,
+    task_hint,
+    task_checkpoint,
+    explicit_context,
+    task_resumed,
+    customer,
+    store,
+    step,
+):
+    state = precheck(request, history or [])
+    state["conversation_context"] = compact_context(current_context)
+    state["available_tasks"] = [
+        task.model_dump(
+            mode="json", exclude={"saved_policy", "completed_steps", "evidence_ids"}
+        )
+        for task in candidates[:8]
+    ]
+    state["task_hint"] = task_hint
+    step(
+        "conversation_context_check",
+        context=compact_context(current_context),
+        scope="server-owned conversation subjects; not current evidence",
+    )
+    if task_checkpoint:
+        state["task_checkpoint"] = task_checkpoint.model_dump(
+            mode="json", exclude={"saved_policy"}
+        )
+        state["checkpoint_is_current_evidence"] = False
+    recent_text = json.dumps(state["recent_turns"])
+    state["references"] = {
+        "owned_order_ids": [
+            o.order_id for o in customer.orders() if o.order_id in recent_text
+        ],
+        "catalog_product_ids": [
+            p.product_id for p in store.fixture.products if p.product_id in recent_text
+        ],
+    }
+    if task_checkpoint:
+        state["references"]["owned_order_ids"] = [
+            key
+            for key in task_checkpoint.selected_order_ids
+            if customer.order(key).order is not None
+        ]
+    if explicit_context:
+        state["references"]["owned_order_ids"] = [
+            ref.record_id for ref in current_context.subjects if ref.kind == "order"
+        ]
+        state["references"]["catalog_product_ids"] = [
+            ref.record_id for ref in current_context.subjects if ref.kind == "product"
+        ]
+    step(
+        "request_check",
+        **state,
+        scope="server-bound customer; read-only tools",
+        prompt_version="support-v1",
+        fixture_version=store.fixture.version,
+    )
+    if task_checkpoint:
+        step(
+            "task_resumed" if task_resumed else "task_created",
+            checkpoint=task_checkpoint.model_dump(
+                mode="json", exclude={"saved_policy"}
+            ),
+            current_state_refresh_required=True,
+        )
+    return state
+
+
 async def run_support(
     request: SupportRequest,
     store: MockStore,
@@ -233,8 +403,19 @@ async def run_support(
     task_checkpoint: TaskCheckpoint | None = None,
     task_resumed: bool = False,
     initial_usage: dict | None = None,
+    conversation_context: ConversationContext | None = None,
+    task_candidates: list[TaskCheckpoint] | None = None,
+    task_hint: str | None = None,
 ) -> SupportResponse:
     steps, catalog, usage = [], {}, {}
+    context_change = None
+    directive = None
+    action_requested = False
+    explicit_context = conversation_context is not None
+    current_context = scope_context(
+        conversation_context or ConversationContext(), customer, store, case_lookup
+    )
+    candidates = task_candidates or []
     usage.update(initial_usage or {})
     prior_resources, token_limit, tool_limit = remaining_resources(
         task_checkpoint, MAX_TOKENS, MAX_TOOL_CALLS
@@ -285,6 +466,17 @@ async def run_support(
             usage=usage,
             embedding_model=index.embedding_model if index else None,
             fixture_version=store.fixture.version,
+            context=current_context if explicit_context else None,
+            context_update=final_change(
+                context_change,
+                tuple(catalog[key] for key in dict.fromkeys(evidence_ids)),
+                reason,
+            )
+            if explicit_context
+            else None,
+            task=task_checkpoint,
+            action_requested=action_requested,
+            task_directive=directive,
         )
 
     def add(kind, source_id, locator, text):
@@ -310,57 +502,19 @@ async def run_support(
         return facts
 
     try:
-        state = precheck(request, history or [])
-        if task_checkpoint:
-            state["task_checkpoint"] = task_checkpoint.model_dump(
-                mode="json", exclude={"saved_policy"}
-            )
-            state["checkpoint_is_current_evidence"] = False
-        recent_text = json.dumps(state["recent_turns"])
-        state["references"] = {
-            "owned_order_ids": [
-                o.order_id for o in customer.orders() if o.order_id in recent_text
-            ],
-            "catalog_product_ids": [
-                p.product_id
-                for p in store.fixture.products
-                if p.product_id in recent_text
-            ],
-        }
-        if task_checkpoint:
-            state["references"]["owned_order_ids"] = [
-                key
-                for key in task_checkpoint.selected_order_ids
-                if customer.order(key).order is not None
-            ]
-        step(
-            "request_check",
-            **state,
-            scope="server-bound customer; read-only tools",
-            prompt_version="support-v1",
-            fixture_version=store.fixture.version,
+        state = request_state(
+            request,
+            history,
+            current_context,
+            candidates,
+            task_hint,
+            task_checkpoint,
+            explicit_context,
+            task_resumed,
+            customer,
+            store,
+            step,
         )
-        if task_checkpoint:
-            step(
-                "task_resumed" if task_resumed else "task_created",
-                checkpoint=task_checkpoint.model_dump(
-                    mode="json", exclude={"saved_policy"}
-                ),
-                current_state_refresh_required=True,
-            )
-            if task_checkpoint.status == "awaiting_approval" and is_confirmation_reply(
-                state["message"]
-            ):
-                step(
-                    "confirmation_route_check",
-                    pending_proposal_ids=pending_ids or [],
-                    task_id=task_checkpoint.task_id,
-                )
-                return finish(
-                    "clarification",
-                    "Please confirm or reject the existing request using its confirmation card.",
-                    "explicit_confirmation_required",
-                )
         if re.fullmatch(
             r"(?:what are my orders|(?:show|list)(?: me)? my orders|my orders)[?.!]*",
             state["message"].lower(),
@@ -372,19 +526,6 @@ async def run_support(
                 "clarification",
                 "Please ask a shorter question with fewer details.",
                 "context_limit",
-            )
-        if (
-            operations_enabled
-            and pending_ids
-            and re.fullmatch(
-                r"(yes|ok|okay|confirm|go ahead)[.! ]*", state["message"], re.IGNORECASE
-            )
-        ):
-            step("confirmation_route_check", pending_proposal_ids=pending_ids)
-            return finish(
-                "clarification",
-                "Please confirm or reject the specific pending proposal using its confirmation action.",
-                "explicit_confirmation_required",
             )
         step(
             "task_budget_check",
@@ -400,31 +541,29 @@ async def run_support(
                 "This request has reached its support limit. Please contact our support team.",
                 "task_resource_budget",
             )
-        step("intent_input", state=state, model=judge.model_id)
-        judgment = await bounded(judge.classify(state), 15)
+        intent_state = classification_input(state)
+        step(
+            "intent_input",
+            state=intent_state,
+            model=judge.model_id,
+            prompt_version=INTENT_PROMPT_VERSION,
+        )
+        judgment = await bounded(judge.classify(intent_state), 15)
         usage["intent"] = judgment.usage
         ensure_task_budget(prior_resources, usage, token_limit)
-        if (
-            task_checkpoint
-            and task_checkpoint.status == "awaiting_approval"
+        action_requested = (
+            operations_enabled
             and judgment.intent == Intent.ACTION
-        ):
-            step(
-                "confirmation_route_check",
-                pending_proposal_ids=pending_ids or [],
-                task_id=task_checkpoint.task_id,
-            )
-            return finish(
-                "clarification",
-                "Please confirm or reject the existing request using its confirmation card.",
-                "explicit_confirmation_required",
-            )
+            and intent_branch(judgment) == "proposal"
+        )
         step(
             "intent_judgment",
             judgment=judgment.model_dump(mode="json"),
-            threshold=THRESHOLD,
+            threshold=INTENT_THRESHOLD,
+            margin=INTENT_MARGIN,
+            application_branch=intent_branch(judgment),
         )
-        if judgment.probability < THRESHOLD:
+        if intent_branch(judgment) in {"read_only", "clarify"}:
             if judgment.intent not in (Intent.INFORMATION, Intent.ACTION):
                 return finish(
                     "clarification",
@@ -444,7 +583,16 @@ async def run_support(
             judgment = judgment.model_copy(update={"intent": Intent.INFORMATION})
         state["pending_proposal_ids"] = pending_ids or []
         state["case_ids"] = list(
-            dict.fromkeys(key for turn in (history or []) for key in turn.case_ids)
+            dict.fromkeys(
+                [
+                    *[key for turn in (history or []) for key in turn.case_ids],
+                    *[
+                        ref.record_id
+                        for ref in current_context.subjects
+                        if ref.kind == "case"
+                    ],
+                ]
+            )
         )
         if operations_enabled and judgment.intent == Intent.HUMAN:
             operation = CaseRequest(
@@ -481,7 +629,7 @@ async def run_support(
             "product_detail": {"product_id": "catalog ID"},
             "compatibility": {"body_id": "catalog ID", "lens_id": "catalog ID"},
         }
-        if operations_enabled:
+        if case_lookup:
             state["tools"]["case_detail"] = {
                 "record_id": "case ID from this conversation"
             }
@@ -497,7 +645,9 @@ async def run_support(
             tool_count += refresh_selected_order(
                 state, customer, order_facts, add, step, tool_limit
             )
-        if task_resumed and task_checkpoint:
+        if explicit_context:
+            restore_policy(current_context.saved_policy, store, state, add, step)
+        elif task_resumed and task_checkpoint:
             restore_policy(task_checkpoint.saved_policy, store, state, add, step)
         for turn in range(MAX_TURNS):
             tokens = reported_tokens(usage)
@@ -519,6 +669,33 @@ async def run_support(
             output, counts = await bounded(model.turn(state, run_id), 40)
             usage[f"model_{turn + 1}"] = counts
             step("model_output", output=output.model_dump(mode="json"), usage=counts)
+            if output.task_directive is not None:
+                directive = output.task_directive
+                task_checkpoint, task_outcome = task_choice(
+                    directive,
+                    candidates,
+                    request.message,
+                    state,
+                    step,
+                    judgment.intent,
+                    operations_enabled,
+                )
+                if task_outcome:
+                    return finish(*task_outcome)
+                prior_resources, token_limit, tool_limit = remaining_resources(
+                    task_checkpoint, MAX_TOKENS, MAX_TOOL_CALLS
+                )
+                ensure_task_budget(prior_resources, usage, token_limit)
+            if output.context_update is not None and output.tool is None:
+                context_change = validate_change(
+                    output.context_update, catalog, current_context
+                )
+                step(
+                    "context_selection_check",
+                    change=context_change.model_dump(mode="json"),
+                    passed=True,
+                )
+
             if state.get("final_decision_only") and output.tool is not None:
                 return finish(
                     "clarification",
@@ -531,41 +708,27 @@ async def run_support(
                 source_text = " ".join(
                     [state["message"], *[t.question for t in (history or [])[-4:]]]
                 ).lower()
-                if not operations_enabled or judgment.intent != Intent.ACTION:
-                    problem = "action_not_requested"
-                elif any(key not in catalog for key in operation.evidence_ids):
-                    problem = "unknown_operation_citation"
-                elif (
-                    operation.order_id
-                    and customer.order(operation.order_id).order is None
-                ):
-                    problem = "order_not_found"
-                elif operation.order_id and not any(
-                    catalog[key].kind == "order"
-                    and catalog[key].source_id == operation.order_id
-                    for key in operation.evidence_ids
-                ):
-                    problem = "missing_order_evidence"
-                elif isinstance(
-                    operation, (CancelProposal, AddressProposal)
-                ) and not any(
-                    catalog[key].kind == "policy" for key in operation.evidence_ids
-                ):
-                    problem = "missing_policy_evidence"
-                elif (
-                    isinstance(operation, CaseRequest)
-                    and operation.customer_statement.lower() not in source_text
-                ):
-                    problem = "invented_customer_statement"
-                elif isinstance(operation, AddressProposal) and any(
-                    value.lower() not in source_text
-                    for value in (
-                        operation.address.line1,
-                        operation.address.city,
-                        operation.address.postal_code,
+                problem = proposal_problem(
+                    operation,
+                    operations_enabled,
+                    judgment.intent,
+                    catalog,
+                    customer,
+                    source_text,
+                )
+                if task_checkpoint is not None and problem is None:
+                    expected_kind = (
+                        "human_review"
+                        if operation.kind == "create_case"
+                        else operation.kind
                     )
-                ):
-                    problem = "invented_address"
+                    if task_checkpoint.kind != expected_kind:
+                        problem = "task_operation_mismatch"
+                    elif (
+                        task_checkpoint.selected_order_ids
+                        and operation.order_id not in task_checkpoint.selected_order_ids
+                    ):
+                        problem = "task_target_mismatch"
                 step(
                     "proposal_check",
                     passed=problem is None,
@@ -578,6 +741,32 @@ async def run_support(
                         "Please provide the owned order and the complete details of the request.",
                         problem,
                     )
+                if explicit_context and task_checkpoint is None:
+                    matches = [
+                        task
+                        for task in candidates
+                        if task.kind
+                        == (
+                            "human_review"
+                            if operation.kind == "create_case"
+                            else operation.kind
+                        )
+                        and task.selected_order_ids
+                        == ((operation.order_id,) if operation.order_id else ())
+                        and task.status not in {"completed", "abandoned"}
+                    ]
+                    if len(matches) == 1:
+                        task_checkpoint = matches[0]
+                        if task_checkpoint.status == "awaiting_approval":
+                            return finish(
+                                "clarification",
+                                "Please confirm or reject the existing request using its confirmation card.",
+                                "explicit_confirmation_required",
+                            )
+                        prior_resources, token_limit, tool_limit = remaining_resources(
+                            task_checkpoint, MAX_TOKENS, MAX_TOOL_CALLS
+                        )
+                        ensure_task_budget(prior_resources, usage, token_limit)
                 if isinstance(operation, (CancelProposal, AddressProposal)):
                     current_order = customer.order(operation.order_id).order
                     assert current_order is not None
@@ -855,11 +1044,7 @@ async def run_support(
                     )
                 elif call.name == "case_detail":
                     args = RecordLookupRequest.model_validate(call.arguments)
-                    case = (
-                        case_lookup(args.record_id)
-                        if operations_enabled and case_lookup
-                        else None
-                    )
+                    case = case_lookup(args.record_id) if case_lookup else None
                     observations.append(
                         add(
                             "case",

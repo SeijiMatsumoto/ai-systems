@@ -268,6 +268,10 @@ class Judgment(Record):
 
 
 class IntentJudgment(Record):
+    scores: dict[Intent, Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]] = (
+        Field(default_factory=dict)
+    )
+    confidence_gap: float | None = Field(default=None, ge=0, le=1)
     intent: Intent
     probability: float = Field(ge=0, le=1, allow_inf_nan=False)
     model: Text
@@ -386,7 +390,44 @@ class ActionReceipt(Record):
     case_id: Identifier | None = None
 
 
+class SubjectReference(Record):
+    kind: Literal["order", "product", "case"]
+    record_id: Identifier
+
+
+class ContextChange(Record):
+    mode: Literal["keep", "select", "clear"] = "keep"
+    subjects: tuple[SubjectReference, ...] = Field(default=(), max_length=10)
+    choices: tuple[SubjectReference, ...] = Field(default=(), max_length=10)
+
+    @model_validator(mode="after")
+    def valid_selection(self):
+        if (self.mode == "select") != bool(self.subjects):
+            raise ValueError("Only select specifies subjects")
+        for refs in (self.subjects, self.choices):
+            if len({(r.kind, r.record_id) for r in refs}) != len(refs):
+                raise ValueError("Duplicate subject reference")
+        return self
+
+
+class TaskDirective(Record):
+    mode: Literal["new", "resume", "correct", "abandon"]
+    task_id: Identifier | None = None
+    kind: Literal["cancel_order", "change_address", "human_review"] | None = None
+
+    @model_validator(mode="after")
+    def valid_target(self):
+        if self.mode == "new":
+            if self.task_id is not None or self.kind is None:
+                raise ValueError("New task needs kind, not an existing task ID")
+        elif self.task_id is None or self.kind is not None:
+            raise ValueError("Existing task directive needs its task ID only")
+        return self
+
+
 class ModelTurn(Record):
+    context_update: ContextChange | None = None
+    task_directive: TaskDirective | None = None
     decision: Annotated[str, Field(min_length=1, max_length=500)]
     tool: ToolCall | None = None
     answer: AnswerDraft | None = None
@@ -452,25 +493,41 @@ class ProposalDecision(Record):
 
 
 class DecisionEnvelope(Record):
+    context_update: ContextChange = Field(default_factory=ContextChange)
+    task_directive: TaskDirective | None = None
     action: Annotated[
         ToolDecision | AnswerDecision | ClarificationDecision | ProposalDecision,
         Field(discriminator="kind"),
     ]
 
     def as_turn(self) -> ModelTurn:
-        return ModelTurn.model_validate(self.action.model_dump(exclude={"kind"}))
+        return ModelTurn.model_validate(
+            {
+                **self.action.model_dump(exclude={"kind"}),
+                "context_update": self.context_update,
+                "task_directive": self.task_directive,
+            }
+        )
 
 
 class FinalDecisionEnvelope(Record):
     """A terminal decision after the harness closes source selection."""
 
+    context_update: ContextChange = Field(default_factory=ContextChange)
+    task_directive: TaskDirective | None = None
     action: Annotated[
         AnswerDecision | ClarificationDecision | ProposalDecision,
         Field(discriminator="kind"),
     ]
 
     def as_turn(self) -> ModelTurn:
-        return ModelTurn.model_validate(self.action.model_dump(exclude={"kind"}))
+        return ModelTurn.model_validate(
+            {
+                **self.action.model_dump(exclude={"kind"}),
+                "context_update": self.context_update,
+                "task_directive": self.task_directive,
+            }
+        )
 
 
 @lru_cache(maxsize=128)
@@ -516,23 +573,6 @@ class SupportStep(Record):
 
 
 TaskKind = Literal["cancel_order", "change_address", "human_review"]
-
-
-class TaskRoute(Record):
-    route: Literal["new", "resume", "correct", "abandon", "clarify"]
-    task_id: Identifier | None = None
-    task_kind: TaskKind | None = None
-    probability: float = Field(default=1, ge=0, le=1)
-    confidence_gap: float | None = Field(default=None, ge=0, le=1)
-    usage: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def target_required(self):
-        if self.route in {"resume", "correct", "abandon"} and self.task_id is None:
-            raise ValueError("Continuation requires a task target")
-        if self.route in {"new", "clarify"} and self.task_id is not None:
-            raise ValueError("New or ambiguous route cannot select a task")
-        return self
 
 
 class TaskResources(Record):
@@ -584,6 +624,33 @@ class TaskCheckpoint(Record):
     saved_policy: tuple[SavedPolicyEvidence, ...] = Field(default=(), max_length=12)
 
 
+class PendingResolution(Record):
+    source_run_id: Identifier | None = None
+    question: Annotated[str, Field(min_length=1, max_length=500)]
+    choices: tuple[SubjectReference, ...] = Field(default=(), max_length=10)
+
+
+class ConversationContext(Record):
+    version: int = Field(default=1, ge=1)
+    subjects: tuple[SubjectReference, ...] = Field(default=(), max_length=10)
+    pending: PendingResolution | None = None
+    source_run_id: Identifier | None = None
+    saved_policy: tuple[SavedPolicyEvidence, ...] = Field(default=(), max_length=12)
+
+
+class IntentDialogueTurn(Record):
+    question: Annotated[str, Field(min_length=1, max_length=500)]
+    answer: Annotated[str, Field(max_length=1500)]
+
+
+class IntentInput(Record):
+    message: Text
+    recent_turns: tuple[IntentDialogueTurn, ...] = Field(default=(), max_length=4)
+    subjects: tuple[SubjectReference, ...] = Field(default=(), max_length=10)
+    pending: PendingResolution | None = None
+    signals: tuple[Text, ...] = Field(default=(), max_length=12)
+
+
 class SupportResponse(Record):
     run_id: Identifier
     conversation_id: Identifier
@@ -609,6 +676,10 @@ class SupportResponse(Record):
     embedding_model: str | None = None
     fixture_version: Identifier
     task: TaskCheckpoint | None = None
+    action_requested: bool = False
+    context: ConversationContext | None = None
+    context_update: ContextChange | None = None
+    task_directive: TaskDirective | None = None
 
 
 class PolicyVector(Record):

@@ -6,8 +6,6 @@ from typing import TypeVar
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import Session
@@ -20,9 +18,12 @@ from backend.customer_support.contracts import (
     CaseCategory,
     CaseRequest,
     ConfirmationRequest,
+    ContextChange,
     Intent,
     ModelTurn,
-    TaskRoute,
+    SubjectReference,
+    SupportResponse,
+    TaskDirective,
 )
 from backend.customer_support.repository import SupportRepository
 from backend.customer_support.tests import test_workflow
@@ -55,13 +56,111 @@ def require_row(db: Session, model: type[Row], key: object) -> Row:
 
 
 class ActionTests(test_workflow.ApiTests):
+    def test_stale_context_cannot_overwrite_or_save_output(self):
+        self.runtime.judge = FakeJudge()
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        initial = self.send("Tell me about my R50 order")
+        token, conversation = (
+            UUID(self.headers["Authorization"].split()[1]),
+            UUID(self.conversation),
+        )
+        run, _, _ = self.repo.begin(token, conversation)
+        snapshot = self.repo.context_snapshot(token, conversation)
+        with Session(self.engine) as db:
+            row = require_row(db, SupportConversation, conversation)
+            assert row.context_state is not None
+            row.context_state = {**row.context_state, "version": snapshot.version + 1}
+            db.commit()
+        stale = SupportResponse.model_validate(
+            {**initial, "run_id": str(run), "context": snapshot.model_dump(mode="json")}
+        )
+        with self.assertRaisesRegex(ValueError, "Stale conversation context"):
+            self.repo.finish(token, conversation, "stale", stale, self.store)
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(SupportOutput, run))
+            stored = require_row(db, SupportConversation, conversation).context_state
+            assert stored is not None
+            self.assertEqual(stored["version"], snapshot.version + 1)
+        self.repo.abort(token, conversation, run)
+
+    def test_ordered_ambiguity_selection_is_persisted_without_task(self):
+        self.send("What are my orders?")
+        refs = tuple(
+            SubjectReference(kind="order", record_id=key)
+            for key in ("order-1004", "order-1001")
+        )
+        self.runtime.judge = FakeJudge()
+        self.model.script = [
+            tool("order_list"),
+            ModelTurn(
+                decision="Resolve ambiguity",
+                clarification="Do you mean the EOS R8 or EOS R50?",
+                context_update=ContextChange(choices=refs),
+            ),
+        ]
+        unresolved = self.send("How much was that camera?")
+        self.assertEqual(
+            [item["record_id"] for item in unresolved["context"]["pending"]["choices"]],
+            ["order-1004", "order-1001"],
+        )
+
+        def selected(state):
+            self.assertEqual(
+                state["conversation_context"]["pending"]["choices"][1]["record_id"],
+                "order-1001",
+            )
+            current = next(
+                item
+                for entry in state["observations"]
+                for item in entry["results"]
+                if item.get("kind") == "order"
+            )
+            return answer(
+                "The item total was $500.", (current["evidence_id"],)
+            ).model_copy(
+                update={
+                    "context_update": ContextChange(mode="select", subjects=(refs[1],))
+                }
+            )
+
+        self.model.script = [tool("order_detail", order_id="order-1001"), selected]
+        result = self.send("The second one")
+        self.assertEqual(result["stop_reason"], "verified")
+        self.assertIsNone(result["task"])
+        self.assertIsNone(result["context"]["pending"])
+        self.assertEqual(result["context"]["subjects"][0]["record_id"], "order-1001")
+
+    def test_topic_switch_does_not_retarget_older_confirmation(self):
+        pending = self.propose()
+        self.runtime.judge = FakeJudge()
+        self.model.script = [
+            tool("order_detail", order_id="order-1004"),
+            lambda state: answer(
+                "Your Canon EOS R8 order is delivered.",
+                tuple(
+                    item["evidence_id"]
+                    for entry in state["observations"]
+                    for item in entry["results"]
+                    if item.get("kind") == "order"
+                ),
+            ),
+        ]
+        current = self.send("Tell me about my EOS R8 order")
+        self.assertEqual(current["context"]["subjects"][0]["record_id"], "order-1004")
+        receipt = self.decide(pending)
+        self.assertEqual(receipt.status_code, 200, receipt.text)
+        self.assertEqual(receipt.json()["receipt"]["order_id"], "order-1001")
+        context = self.repo.context_snapshot(
+            UUID(self.headers["Authorization"].split()[1]), UUID(self.conversation)
+        )
+        self.assertEqual(context.subjects[0].record_id, "order-1004")
+
     def test_eligibility_then_varied_order_followups_use_saved_target(self):
         listed = self.send("What are my orders?")
         self.assertEqual(
             len([item for item in listed["evidence"] if item["kind"] == "order"]), 5
         )
         self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
-        self.runtime.judge.route_decision = TaskRoute(route="clarify", probability=0.77)
 
         def eligibility(state):
             evidence = [
@@ -117,12 +216,15 @@ class ActionTests(test_workflow.ApiTests):
                     self.assertEqual(evidence[0]["source_id"], "order-1001")
                     return answer(text, (evidence[0]["evidence_id"],))
 
-                self.model.script = [followup]
+                self.model.script = [
+                    tool("order_detail", order_id="order-1001"),
+                    followup,
+                ]
                 before = len(self.model.calls)
                 result = self.send(prompt)
                 self.assertEqual(result["stop_reason"], "verified")
-                self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
-                self.assertEqual(len(self.model.calls), before + 1)
+                self.assertIsNone(result["task"])
+                self.assertEqual(len(self.model.calls), before + 2)
                 self.assertEqual(result["answer"], text)
                 self.assertIsNone(result["pending_action"])
                 self.assertIsNone(result["review_case"])
@@ -133,7 +235,6 @@ class ActionTests(test_workflow.ApiTests):
     def test_eligibility_then_policy_question_preserves_exact_task(self):
         self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
         # Make the semantic router fail if called: this reference is deterministic.
-        self.runtime.judge.route_decision = TaskRoute(route="clarify", probability=0.95)
 
         def eligibility(state):
             evidence = [
@@ -154,7 +255,10 @@ class ActionTests(test_workflow.ApiTests):
         ]
         first = self.send("Can I cancel my unshipped camera order?")
         self.assertEqual(first["stop_reason"], "verified")
-        self.assertEqual(first["task"]["selected_order_ids"], ["order-1001"])
+        self.assertIsNone(first["task"])
+        self.assertEqual(
+            first["context"]["subjects"], [{"kind": "order", "record_id": "order-1001"}]
+        )
 
         def policy_answer(state):
             self.assertEqual(state["references"]["owned_order_ids"], ["order-1001"])
@@ -173,7 +277,7 @@ class ActionTests(test_workflow.ApiTests):
         self.model.script = [policy_answer]
         result = self.send("What does the cancellation policy require for that order?")
         self.assertEqual(result["stop_reason"], "verified")
-        self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+        self.assertIsNone(result["task"])
         self.assertIsNone(result["pending_action"])
         self.assertFalse(
             any(name == "continuation" for name, _ in self.runtime.judge.calls)
@@ -184,7 +288,7 @@ class ActionTests(test_workflow.ApiTests):
                 for step in result["steps"]
                 if step["stage"] == "tool_request"
             ],
-            ["order_detail"],
+            [],
         )
 
     def test_followup_reuses_policy_but_refreshes_order_and_accumulates_resources(self):
@@ -208,10 +312,10 @@ class ActionTests(test_workflow.ApiTests):
                 tuple(item["evidence_id"] for item in evidence),
             )
 
-        self.model.script = [explanation]
+        self.model.script = [tool("order_detail", order_id="order-1001"), explanation]
         result = self.send("Can I cancel that order under the policy?")
         self.assertEqual(result["stop_reason"], "verified")
-        self.assertEqual(result["task"]["task_id"], task_id)
+        self.assertIsNone(result["task"])
         requests = [
             step["details"]["name"]
             for step in result["steps"]
@@ -225,19 +329,10 @@ class ActionTests(test_workflow.ApiTests):
         self.assertEqual(
             reuse["details"]["reused"][0]["source_run_id"], first["run_id"]
         )
-        self.assertEqual(result["task"]["resources"]["executions"], 2)
-        self.assertEqual(
-            result["task"]["resources"]["tokens"],
-            first["task"]["resources"]["tokens"]
-            + sum(
-                value.get("input_tokens", 0) + value.get("output_tokens", 0)
-                for value in result["usage"].values()
-            ),
-        )
-        self.assertEqual(
-            result["task"]["resources"]["tool_calls"],
-            first["task"]["resources"]["tool_calls"] + 1,
-        )
+        with Session(self.engine) as db:
+            saved = require_row(db, SupportTask, UUID(task_id)).checkpoint
+            self.assertEqual(saved["resources"], first["task"]["resources"])
+            self.assertEqual(saved["version"], first["task"]["version"])
 
     def test_reused_policy_never_reuses_mutable_order_state(self):
         self.propose()
@@ -262,14 +357,17 @@ class ActionTests(test_workflow.ApiTests):
             self.assertEqual(json.loads(order["text"])["fulfillment"], "shipped")
             return answer("Your order has shipped.", (order["evidence_id"],))
 
-        self.model.script = [current_answer]
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            current_answer,
+        ]
         result = self.send("Can I cancel that order under the policy?")
         self.assertEqual(result["stop_reason"], "verified")
 
     def test_stale_policy_is_invalidated_before_followup_answer(self):
         from backend.customer_support.retrieval import ingest
 
-        first = self.propose()
+        self.propose()
         policies = tuple(
             p.model_copy(update={"revision": "revised-policy"})
             for p in self.store.fixture.policies
@@ -305,7 +403,7 @@ class ActionTests(test_workflow.ApiTests):
         )
         self.assertEqual(reuse["details"]["reused"], [])
         self.assertTrue(reuse["details"]["invalidated"])
-        self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
+        self.assertIsNone(result["task"])
 
     def test_failed_provider_usage_is_charged_to_same_task(self):
         from backend.customer_support.providers import ModelBoundaryFailure
@@ -323,11 +421,15 @@ class ActionTests(test_workflow.ApiTests):
         result = self.send("Can I cancel that order under the policy?")
         self.assertEqual(result["stop_reason"], "provider_or_validation_failure")
         self.assertIsNone(result["review_case"])
-        self.assertEqual(
-            result["task"]["resources"]["tokens"],
-            first["task"]["resources"]["tokens"] + 572,
-        )
-        self.assertEqual(result["task"]["resources"]["executions"], 2)
+        self.assertIsNone(result["task"])
+        self.assertEqual(result["usage"]["failed_model"]["input_tokens"], 500)
+        with Session(self.engine) as db:
+            self.assertEqual(
+                require_row(db, SupportTask, UUID(first["task"]["task_id"])).checkpoint[
+                    "resources"
+                ],
+                first["task"]["resources"],
+            )
 
     def test_exhausted_task_blocks_models_but_specific_confirmation_still_works(self):
         first = self.propose()
@@ -342,45 +444,42 @@ class ActionTests(test_workflow.ApiTests):
             row.checkpoint = checkpoint
         before = len(self.model.calls)
         self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
-        result = self.send("Can I cancel that order under the policy?")
-        self.assertEqual(result["stop_reason"], "task_resource_budget")
-        self.assertEqual(len(self.model.calls), before)
-        self.assertEqual(self.runtime.judge.calls, [])
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        result = self.send("How much was that order?")
+        self.assertEqual(result["stop_reason"], "verified")
+        self.assertEqual(len(self.model.calls), before + 2)
+        self.assertIsNone(result["task"])
         self.assertIsNone(result["review_case"])
         self.assertEqual(self.decide(first).status_code, 200)
 
-    def test_routing_timeout_preserves_tasks_and_saves_failure_without_case(self):
+    def test_intent_timeout_preserves_context_and_tasks_without_case(self):
         first = self.propose()
-        second = self.propose(
-            "change_address",
-            address=Address(
-                line1="200 Demo Road",
-                city="Exampleville",
-                postal_code="12345",
-                country="US",
-            ),
+        before_context = self.repo.context_snapshot(
+            UUID(self.headers["Authorization"].split()[1]), UUID(self.conversation)
         )
         before = len(self.model.calls)
         with patch.object(
             self.runtime.judge,
-            "route_task",
+            "classify",
             AsyncMock(side_effect=TimeoutError("provider timeout")),
         ):
-            result = self.send("That one")
+            result = self.send("How much did I pay for that?")
         self.assertEqual(result["stop_reason"], "provider_or_validation_failure")
         self.assertIsNone(result["review_case"])
         self.assertEqual(len(self.model.calls), before)
+        self.assertEqual(
+            self.repo.context_snapshot(
+                UUID(self.headers["Authorization"].split()[1]), UUID(self.conversation)
+            ),
+            before_context,
+        )
         with Session(self.engine) as db:
             self.assertEqual(
-                require_row(db, LlmRun, UUID(result["run_id"])).status, "failed"
+                require_row(db, SupportTask, UUID(first["task"]["task_id"])).checkpoint[
+                    "version"
+                ],
+                first["task"]["version"],
             )
-            for response in (first, second):
-                self.assertEqual(
-                    require_row(
-                        db, SupportTask, UUID(response["task"]["task_id"])
-                    ).checkpoint["status"],
-                    "awaiting_approval",
-                )
 
     def test_topic_switch_keeps_both_tasks_and_returns_to_older_one(self):
         first = self.propose()
@@ -393,23 +492,25 @@ class ActionTests(test_workflow.ApiTests):
                 country="US",
             ),
         )
-        self.assertEqual(second["task"]["kind"], "change_address")
-        self.assertNotEqual(first["task"]["task_id"], second["task"]["task_id"])
-        assert isinstance(self.runtime.judge, FakeJudge)
-        self.runtime.judge.route_decision = TaskRoute(
-            route="resume", task_id=first["task"]["task_id"], probability=0.95
-        )
-        before = len(self.model.calls)
-        resumed = self.send("Back to my earlier request")
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+        self.model.script = [
+            ModelTurn(
+                decision="Resume earlier cancellation",
+                clarification="Would you like to confirm the existing cancellation?",
+                task_directive=TaskDirective(
+                    mode="resume", task_id=first["task"]["task_id"]
+                ),
+            )
+        ]
+        resumed = self.send("Back to my earlier cancellation")
         self.assertEqual(resumed["task"]["task_id"], first["task"]["task_id"])
         self.assertEqual(resumed["stop_reason"], "explicit_confirmation_required")
-        self.assertEqual(len(self.model.calls), before)
         with Session(self.engine) as db:
             self.assertEqual(
                 require_row(
                     db, SupportTask, UUID(second["task"]["task_id"])
-                ).checkpoint["status"],
-                "awaiting_approval",
+                ).checkpoint["version"],
+                second["task"]["version"],
             )
             self.assertEqual(
                 db.scalar(select(func.count()).select_from(SupportProposal)), 2
@@ -417,7 +518,7 @@ class ActionTests(test_workflow.ApiTests):
 
     def test_ambiguous_reply_preserves_both_pending_tasks(self):
         first = self.propose()
-        self.propose(
+        second = self.propose(
             "change_address",
             address=Address(
                 line1="200 Demo Road",
@@ -426,42 +527,65 @@ class ActionTests(test_workflow.ApiTests):
                 country="US",
             ),
         )
-        before = len(self.model.calls)
-        result = self.send("That one")
-        self.assertEqual(result["stop_reason"], "task_reference_ambiguous")
-        self.assertIsNone(result["task"])
-        self.assertEqual(len(self.model.calls), before)
-        with Session(self.engine) as db:
-            self.assertEqual(
-                require_row(db, SupportTask, UUID(first["task"]["task_id"])).checkpoint[
-                    "status"
-                ],
-                "awaiting_approval",
+        self.runtime.judge = FakeJudge(intent=Intent.INFORMATION)
+        self.model.script = [
+            ModelTurn(
+                decision="Need subject",
+                clarification="Do you mean the cancellation or address change?",
             )
+        ]
+        result = self.send("That one")
+        self.assertEqual(result["stop_reason"], "missing_reference")
+        self.assertIsNotNone(result["context"]["pending"])
+        with Session(self.engine) as db:
+            for item in (first, second):
+                self.assertEqual(
+                    require_row(
+                        db, SupportTask, UUID(item["task"]["task_id"])
+                    ).checkpoint["version"],
+                    item["task"]["version"],
+                )
 
     def test_correction_discards_old_target_and_rechecks_new_one(self):
-        self.runtime.judge = FakeJudge()
-        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
-        first = self.send("Can I cancel my camera order?")
-        self.runtime.judge.route_decision = TaskRoute(
-            route="correct", task_id=first["task"]["task_id"], probability=0.95
-        )
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
         self.model.script = [
-            tool("order_detail", order_id="order-1002"),
+            ModelTurn(
+                decision="Need cancellation target",
+                clarification="Which order should we cancel?",
+                task_directive=TaskDirective(mode="new", kind="cancel_order"),
+            )
+        ]
+        first = self.send("Cancel an order")
+        self.model.script = [
+            tool("order_detail", order_id="order-1002").model_copy(
+                update={
+                    "task_directive": TaskDirective(
+                        mode="correct", task_id=first["task"]["task_id"]
+                    )
+                }
+            ),
             answer("The lens order has a shipping label created."),
         ]
-        corrected = self.send("Actually, I meant order-1002")
+        corrected = self.send("Actually, I meant the lens order")
         self.assertEqual(corrected["task"]["task_id"], first["task"]["task_id"])
         self.assertEqual(corrected["task"]["selected_order_ids"], ["order-1002"])
-        self.assertEqual(self.model.calls[-2]["references"]["owned_order_ids"], [])
+        self.assertEqual(self.model.calls[-1]["references"]["owned_order_ids"], [])
 
     def test_abandonment_requires_card_rejection_when_approval_is_pending(self):
         first = self.propose()
-        before = len(self.model.calls)
+        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
+        self.model.script = [
+            ModelTurn(
+                decision="Abandon request",
+                clarification="Would you like to reject this proposal?",
+                task_directive=TaskDirective(
+                    mode="abandon", task_id=first["task"]["task_id"]
+                ),
+            )
+        ]
         result = self.send("Never mind")
         self.assertEqual(result["stop_reason"], "explicit_rejection_required")
         self.assertEqual(result["task"]["status"], "awaiting_approval")
-        self.assertEqual(len(self.model.calls), before)
         self.assertEqual(
             self.decide(first, "reject").json()["disposition"], "action_rejected"
         )
@@ -471,26 +595,35 @@ class ActionTests(test_workflow.ApiTests):
         self.model.script = [
             ModelTurn(
                 decision="Need target",
-                clarification="Which item would you like to cancel?",
+                clarification="Which order should we cancel?",
+                task_directive=TaskDirective(mode="new", kind="cancel_order"),
             )
         ]
         first = self.send("Cancel an order")
+        self.model.script = [
+            ModelTurn(
+                decision="Abandon cancellation",
+                clarification="Do you want to stop?",
+                task_directive=TaskDirective(
+                    mode="abandon", task_id=first["task"]["task_id"]
+                ),
+            )
+        ]
         result = self.send("Never mind")
         self.assertEqual(result["task"]["task_id"], first["task"]["task_id"])
         self.assertEqual(result["task"]["status"], "abandoned")
         self.assertIsNone(result["review_case"])
         self.assertIsNone(result["pending_action"])
 
-    def test_resumed_task_refreshes_target_without_model_discovery_turn(self):
+    def test_action_after_information_uses_focus_without_duplicate_reads(self):
         self.runtime.judge = FakeJudge()
         self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
-        self.send("Can I cancel my unshipped camera order?")
+        initial = self.send("Can I cancel my unshipped camera order?")
+        self.assertIsNone(initial["task"])
         self.runtime.judge = FakeJudge(intent=Intent.ACTION)
-        before = len(self.model.calls)
 
         def proposal(state):
-            self.assertNotIn("order_detail", state["tools"])
-            self.assertTrue(state["final_decision_only"])
+            self.assertEqual(state["references"]["owned_order_ids"], ["order-1001"])
             evidence = [
                 item for entry in state["observations"] for item in entry["results"]
             ]
@@ -503,10 +636,13 @@ class ActionTests(test_workflow.ApiTests):
                 ),
             )
 
-        self.model.script = [tool("policy_search", query="cancellation"), proposal]
+        self.model.script = [
+            tool("order_detail", order_id="order-1001"),
+            tool("policy_search", query="cancellation"),
+            proposal,
+        ]
         result = self.send("Yes, cancel please")
         self.assertEqual(result["disposition"], "awaiting_confirmation")
-        self.assertEqual(len(self.model.calls) - before, 2)
         self.assertEqual(
             [
                 s["details"]["name"]
@@ -515,78 +651,37 @@ class ActionTests(test_workflow.ApiTests):
             ],
             ["order_detail", "policy_search"],
         )
-        self.assertFalse(
-            any(s["stage"] == "duplicate_tool_check" for s in result["steps"])
-        )
 
-    def test_followup_cancellation_reuses_target_and_completes_policy_evidence(self):
+    def test_focus_survives_restart_and_unrelated_policy_turns(self):
         self.runtime.judge = FakeJudge()
-        self.model.script = [
-            tool("order_detail", order_id="order-1001"),
-            test_workflow.answer("Your Canon EOS R50 order is paid and unfulfilled."),
-        ]
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
         initial = self.send("Can I cancel my unshipped camera order?")
-        task_id = initial["task"]["task_id"]
         self.repo = SupportRepository(self.repo.session_factory)
-        self.client.close()
-        self.app = FastAPI()
-        self.app.include_router(test_workflow.api.router)
-        self.app.dependency_overrides[test_workflow.api.repository] = lambda: self.repo
-        self.app.dependency_overrides[test_workflow.api.runtime] = lambda: self.runtime
-        self.client = TestClient(self.app)
         for _ in range(5):
-            self.send("What are my orders?")
-        self.runtime.judge = FakeJudge(intent=Intent.ACTION)
-
-        def proposal(state):
-            self.assertEqual(state["references"]["owned_order_ids"], ["order-1001"])
-            evidence = [
-                item
-                for entry in state["observations"]
-                for item in entry["results"]
-                if "evidence_id" in item
-            ]
-            return ModelTurn(
-                decision="Propose cancellation",
-                proposal=CancelProposal(
-                    kind="cancel_order",
-                    order_id="order-1001",
-                    evidence_ids=tuple(item["evidence_id"] for item in evidence),
+            self.model.script = [
+                tool("policy_search", query="return policy"),
+                lambda state: answer(
+                    "Returns need review.",
+                    (
+                        next(
+                            item["evidence_id"]
+                            for entry in state["observations"]
+                            for item in entry["results"]
+                            if item["kind"] == "policy"
+                        ),
+                    ),
                 ),
-            )
-
-        self.model.script = [
-            tool("order_detail", order_id="order-1001"),
-            tool("order_detail", order_id="order-1001"),
-            tool("policy_search", query="cancellation"),
-            proposal,
-        ]
-        response = self.send("Yes, cancel please")
-        self.assertEqual(response["disposition"], "awaiting_confirmation")
-        self.assertIsNotNone(response["pending_action"])
-        self.assertIsNone(response["receipt"])
-        self.assertEqual(response["task"]["task_id"], task_id)
-        self.assertEqual(response["task"]["status"], "awaiting_approval")
-        self.assertEqual(response["task"]["version"], 3)
-        self.assertTrue(any(s["stage"] == "task_resumed" for s in response["steps"]))
-        requests = [
-            s["details"]["name"]
-            for s in response["steps"]
-            if s["stage"] == "tool_request"
-        ]
-        self.assertEqual(requests, ["order_detail", "policy_search"])
-        calls = len(self.model.calls)
-        repeat = self.send("Yes, cancel please")
-        self.assertEqual(repeat["stop_reason"], "explicit_confirmation_required")
-        self.assertEqual(repeat["task"]["status"], "awaiting_approval")
-        self.assertEqual(len(self.model.calls), calls)
-        with Session(self.engine) as db:
+            ]
+            response = self.send("What is the return policy?")
             self.assertEqual(
-                db.scalar(select(func.count()).select_from(SupportProposal)), 1
+                response["context"]["subjects"], initial["context"]["subjects"]
             )
-        decided = self.decide(response).json()
-        self.assertEqual(decided["task"]["task_id"], task_id)
-        self.assertEqual(decided["task"]["status"], "completed")
+        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        result = self.send("How much did I pay for that?")
+        self.assertEqual(result["stop_reason"], "verified")
+        self.assertEqual(
+            self.model.calls[-2]["references"]["owned_order_ids"], ["order-1001"]
+        )
 
     def test_clarification_checkpoint_resumes_without_original_transcript(self):
         self.runtime.judge = FakeJudge(intent=Intent.ACTION)
@@ -594,12 +689,22 @@ class ActionTests(test_workflow.ApiTests):
             ModelTurn(
                 decision="Need target",
                 clarification="Which order would you like to cancel?",
+                task_directive=TaskDirective(mode="new", kind="cancel_order"),
             )
         ]
         initial = self.send("Cancel an order")
         self.assertEqual(initial["task"]["status"], "awaiting_clarification")
         self.repo = SupportRepository(self.repo.session_factory)
-        self.model.script = [tool("order_detail", order_id="order-1001"), answer()]
+        self.model.script = [
+            tool("order_detail", order_id="order-1001").model_copy(
+                update={
+                    "task_directive": TaskDirective(
+                        mode="resume", task_id=initial["task"]["task_id"]
+                    )
+                }
+            ),
+            answer(),
+        ]
         result = self.send("order-1001")
         self.assertEqual(result["task"]["task_id"], initial["task"]["task_id"])
         self.assertEqual(
@@ -618,16 +723,19 @@ class ActionTests(test_workflow.ApiTests):
             self.assertEqual(
                 checkpoint.checkpoint["version"], initial["task"]["version"]
             )
-        other = self.repo.create_conversation(UUID(self.token))
-        run, _, _ = self.repo.begin(UUID(self.token), other)
-        from backend.customer_support.contracts import TaskRoute
-
-        checkpoint, resumed = self.repo.apply_task_route(
-            UUID(self.token), other, run, "Yes", TaskRoute(route="new")
+        other = self.repo.create_conversation(
+            UUID(self.headers["Authorization"].split()[1])
         )
-        self.assertIsNone(checkpoint)
-        self.assertFalse(resumed)
-        self.repo.abort(UUID(self.token), other, run)
+        run, _, _ = self.repo.begin(
+            UUID(self.headers["Authorization"].split()[1]), other
+        )
+        self.assertEqual(
+            self.repo.context_snapshot(
+                UUID(self.headers["Authorization"].split()[1]), other
+            ).subjects,
+            (),
+        )
+        self.repo.abort(UUID(self.headers["Authorization"].split()[1]), other, run)
 
     # Reuse the isolated API setup while retaining its read-only regressions.
     def send(self, message):
@@ -836,7 +944,7 @@ class ActionTests(test_workflow.ApiTests):
         ]
         followup = self.send("What is the status of that case?")
         self.assertEqual(followup["disposition"], "answered")
-        self.assertEqual(followup["task"]["task_id"], result["task"]["task_id"])
+        self.assertIsNone(followup["task"])
         self.assertIn(case["case_id"], self.model.calls[-2]["case_ids"])
 
     def test_human_handoff_and_case_scope(self):
@@ -874,8 +982,17 @@ class ActionTests(test_workflow.ApiTests):
         self.assertIsNone(result["pending_action"])
 
     def test_yes_does_not_execute(self):
-        self.propose()
+        result = self.propose()
         self.model.script = []
+        self.model.script = [
+            ModelTurn(
+                decision="Use saved proposal",
+                clarification="Would you like to confirm?",
+                task_directive=TaskDirective(
+                    mode="resume", task_id=result["task"]["task_id"]
+                ),
+            )
+        ]
         followup = self.send("Do it for me")
         self.assertEqual(followup["stop_reason"], "explicit_confirmation_required")
         self.assertEqual(
@@ -896,7 +1013,7 @@ class ActionTests(test_workflow.ApiTests):
             with self.assertRaises(RuntimeError):
                 confirm(
                     self.repo,
-                    UUID(self.token),
+                    UUID(self.headers["Authorization"].split()[1]),
                     UUID(self.conversation),
                     UUID(result["pending_action"]["proposal_id"]),
                     ConfirmationRequest(decision="confirm"),
@@ -1089,7 +1206,7 @@ class ActionTests(test_workflow.ApiTests):
                 try:
                     return confirm(
                         repo,
-                        UUID(self.token),
+                        UUID(self.headers["Authorization"].split()[1]),
                         UUID(self.conversation),
                         UUID(result["pending_action"]["proposal_id"]),
                         ConfirmationRequest(decision="confirm"),

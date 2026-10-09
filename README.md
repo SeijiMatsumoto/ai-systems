@@ -1,6 +1,6 @@
 # AI Systems Architecture Demos
 
-This repository is an interview-oriented set of five common AI system designs. Each system has a distinct request flow, output contract, and boundary between model judgment and deterministic application code. The emphasis is on explaining and inspecting architecture, not building five production services.
+This repository showcases five common AI system designs. Each system has a distinct request flow, output contract, and boundary between model judgment and deterministic application code. The emphasis is on making each architecture inspectable end to end, not on building five production services.
 
 | System | Demonstrates | Status |
 | --- | --- | --- |
@@ -74,4 +74,4 @@ The shared [`llm_runs` schema](backend/db/README.md) holds cross-system run IDs,
 
 ## Scope
 
-This is an architecture portfolio. The research demo does not provide user authentication, source-level access control, human approval actions, or a representative evaluation benchmark. A live research run requires external providers and local infrastructure. Offline checks do not establish live provider behavior or generated briefing quality.
+These are architecture demos, not production services. The research demo does not provide user authentication, source-level access control, human approval actions, or a representative evaluation benchmark. A live research run requires external providers and local infrastructure. Offline checks do not establish live provider behavior or generated briefing quality.

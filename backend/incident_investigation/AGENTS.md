@@ -4,7 +4,7 @@ Follow the repository-root `AGENTS.md` as well. This file records the incident d
 
 ## Approved direction
 
-- Build one interview portfolio demo around a substantial, versioned synthetic incident spanning several services.
+- Build one demo around a substantial, versioned synthetic incident spanning several services.
 - Include correlated logs, metric series, trace spans, alerts, and deployment records, with routine noise, missing data, and a misleading nearby correlation.
 - Expose the incident data through scoped, read-only query tools. Keep service, time-window, and result limits in application code.
 - Use one bounded investigator to choose follow-up queries and produce a report for engineer review. Resolve evidence IDs and check claims in application code.
@@ -21,11 +21,11 @@ The user approved this overall sequence, not the implementation details of any p
 | 2B. Investigation loop | Bounded agent, tool steps, stop reason, and Logfire export | Reviewed and committed |
 | 3. Report and verification | Typed cited report, deterministic evidence checks, API response | Reviewed and committed |
 | 4. Frontend | Incident workspace with timeline, evidence, tool steps, and review state | Reviewed and committed |
-| 5. Scenario checks and docs | Offline cases and accurate portfolio documentation | Reviewed and committed (`88dc4ec`); final review brief committed (`b3c9a17`) |
+| 5. Scenario checks and docs | Offline cases and accurate documentation | Reviewed and committed (`88dc4ec`); final review brief committed (`b3c9a17`) |
 
 ## Log-stream entry-point rework
 
-The rework is complete as an interview portfolio demo. Changes were reviewed
+The rework is complete as a demo. Changes were reviewed
 before their commits to `main`.
 
 | Phase | Outcome | Status |
@@ -91,7 +91,7 @@ Simulation reports and workflow steps are saved in `incident_simulation_outputs`
 and can be reopened from the frontend. Migration 005 was applied to this
 checkout's configured Neon database on 2026-09-29. The older v1 alert API is
 still runnable but is no longer the frontend entry point. The incident demo is
-complete for portfolio use. Its classifier thresholds have limited live
+complete. Its classifier thresholds have limited live
 calibration, report approval has no reviewer identity or authorization, and the
 report's cause remains a hypothesis until an engineer verifies it. Do not
 describe these demo boundaries as production guarantees.

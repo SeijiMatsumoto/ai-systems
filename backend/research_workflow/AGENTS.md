@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a runnable portfolio demo. Phases 1, 2, and 3 were reviewed and committed. Phase 3 adds a Jev request judgment with an application gate and visible fallback, plus a live and saved in-app walkthrough with a system diagram. Migration 006 was applied to the configured database on 2026-09-30; all 15 older research rows have matching `llm_runs` rows.
+This is a runnable demo. Phases 1, 2, and 3 were reviewed and committed. Phase 3 adds a Jev request judgment with an application gate and visible fallback, plus a live and saved in-app walkthrough with a system diagram. Migration 006 was applied to the configured database on 2026-09-30; all 15 older research rows have matching `llm_runs` rows.
 
 ## Contracts and boundaries
 
@@ -25,7 +25,7 @@ Offline verification also covers shared/domain lifecycle linkage, a saved failed
 
 ## Phase 3 review gate
 
-Offline research tests cover Jev adapter shape and usage, threshold and fallback branches, early rejection before provider prefetch, and a fake-model workflow. Frontend build, lint, and tests cover stream parsing and run navigation. A local mock API demonstrated streaming steps, completed Briefing navigation, and saved Run restoration in the browser. Ruff checks pass on the changed Python files. No live Jev, Tavily, OpenAI, or full research run was called for this phase. The broader interview outline's durable worker queue, generalized planner, parallel subtasks, and human review action remain future design extensions rather than implemented features.
+Offline research tests cover Jev adapter shape and usage, threshold and fallback branches, early rejection before provider prefetch, and a fake-model workflow. Frontend build, lint, and tests cover stream parsing and run navigation. A local mock API demonstrated streaming steps, completed Briefing navigation, and saved Run restoration in the browser. Ruff checks pass on the changed Python files. No live Jev, Tavily, OpenAI, or full research run was called for this phase. The broader design's durable worker queue, generalized planner, parallel subtasks, and human review action remain future design extensions rather than implemented features.
 
 ## First live run follow-up
 

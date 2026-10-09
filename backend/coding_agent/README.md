@@ -99,7 +99,7 @@ crash recovery is deferred: an interrupted run should be marked incomplete, neve
 replayed blindly. A future resume design would need tool IDs, reconciled filesystem
 state and idempotent mutation handling.
 
-## Interview tradeoffs
+## Design tradeoffs
 
 - **Lexical/symbol search and progressive reads:** useful for precise identifiers and
   dependencies; current-tree reads avoid stale context. Embeddings can be added if

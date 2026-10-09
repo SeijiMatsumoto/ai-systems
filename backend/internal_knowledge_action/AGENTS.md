@@ -80,7 +80,7 @@ A saved live run for “How do I request time off?” (`29fa725c-0f0e-4bb6-8564-
 
 ## Phase 3 acceptance target
 
-**Phase 3:** a natural-language action request can create only a proposal for one mock task type. Policy checks action type, arguments, requester scope, and approval state before execution; recheck policy at execution and use an idempotency key so repeated approval does not create duplicate tasks. Show approve/reject and blocked states in the UI and saved steps. Offline cases include permitted execution, unauthorized proposal, denied approval, repeated execution, and stale policy or source state. No external action API is needed for the portfolio slice.
+**Phase 3:** a natural-language action request can create only a proposal for one mock task type. Policy checks action type, arguments, requester scope, and approval state before execution; recheck policy at execution and use an idempotency key so repeated approval does not create duplicate tasks. Show approve/reject and blocked states in the UI and saved steps. Offline cases include permitted execution, unauthorized proposal, denied approval, repeated execution, and stale policy or source state. No external action API is needed for the demo slice.
 
 ### Phase 3 approved implementation plan
 

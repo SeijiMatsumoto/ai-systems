@@ -254,7 +254,7 @@ function ToolCatalog({ onSelect }: { onSelect: (tool: ToolDefinition) => void })
         <p className="section-kicker">Workbench</p>
         <h1>Five AI system designs. Four runnable demos.</h1>
         <p>
-          Compare the request flow, model boundary, and output of common interview systems.
+          Compare the request flow, model boundary, and output of common AI system architectures.
           Investigate a synthetic incident, run cited company research, or ask an access-controlled knowledge assistant. Customer Support answers camera-shop questions and routes checked order changes or human-review cases. Coding Agent remains planned.
         </p>
       </div>

@@ -4,7 +4,7 @@ The runnable camera-shop demo separates policy, current account facts, conversat
 
 ## Architecture
 
-The demo follows the Customer Support architecture in the Notion interview outline: separate policy retrieval, authoritative account/order reads, and checked action tools. Camera equipment makes the examples concrete. The backend flow is:
+The demo separates policy retrieval, authoritative account/order reads, and checked action tools. Camera equipment makes the examples concrete. The backend flow is:
 
 ```text
 Simulated sign-in -> conversation API + compact conversation state
